@@ -69,15 +69,56 @@ class PskImporter(object):
         for point in psk.points:
             bm.verts.new((point.x, point.y, point.z))
 
+        def replace_vertices(vertex_indices: List[int]):
+            yield False
+            yield vertex_indices[1] == vertex_indices[0]
+            yield vertex_indices[2] == vertex_indices[0] or vertex_indices[2] == vertex_indices[1]
+
+        # TODO: fix degenerate geometry
+        for psk_face in psk.faces:
+            wedges = psk.wedges[psk_face.wedge_index_1], \
+                     psk.wedges[psk_face.wedge_index_2], \
+                     psk.wedges[psk_face.wedge_index_3]
+            vertex_indices = [w.point_index for w in wedges]
+            replace_vertices(vertex_indices)
+            if len(set(vertex_indices)) == 3:
+                continue
+            print(list(replace_vertices(vertex_indices)))
+            for i, should_replace in enumerate(replace_vertices(vertex_indices)):
+                if should_replace:
+                    point = psk.points[vertex_indices[i]]
+                    new_point_index = len(bm.verts)
+                    bm.verts.new((point.x, point.y, point.z))
+                    wedges[i].point_index = new_point_index
+            print('old vertex indices')
+            print(vertex_indices)
+            print('new vertex indices')
+            print([w.point_index for w in wedges])
+
         bm.verts.ensure_lookup_table()
 
         # TODO: somehow get the smoothing group info incorporated (edge split modifiers, maybe?)
+        # FACES might need to be remapped (original face indices ~> actual face indices?)
+        # other, better option: gracefully handle the degenerate geometry
+        # by creating extra vertices and keeping track of that shit
         for i, psk_face in enumerate(psk.faces):
             wedges = psk.wedges[psk_face.wedge_index_1], \
                      psk.wedges[psk_face.wedge_index_2], \
                      psk.wedges[psk_face.wedge_index_3]
             vertex_indices = [w.point_index for w in wedges]
-            face = bm.faces.new([bm.verts[x] for x in vertex_indices])
+            # TODO: this can fail apparently??
+            try:
+                face = bm.faces.new([bm.verts[x] for x in vertex_indices])
+            except ValueError as e:
+                # TODO: this indicates that the same cyclical winding order
+                # was used for another face. this *probably* means we can ditch the face
+                # however, maybe not, because what if the vertex weighting makes it
+                # so that these faces are not coplanar with different pose bones?
+                # might be useful to see this in practice!!
+                print(e)
+                print(vertex_indices)
+                print([bm.verts[x].co for x in vertex_indices])
+                raise e
             face.smooth = True
             face.material_index = psk_face.material_index
 

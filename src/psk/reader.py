@@ -26,7 +26,7 @@ class PskReader(object):
                 assert len(buffer) == sizeof(Section), \
                     f'Section size mismatch (expected: {sizeof(Section)}, found {len(buffer)})'
                 section = Section.from_buffer_copy(buffer)
-                assert section.type_flags == 1999801
+                # assert section.type_flags == 1999801, f'Bad type_flags ({section.type_flags}) for section with name {section.name}'
                 if section.name == b'PNTS0000':
                     psk.points.extend(self.read_section_data(f, section, Vector3))
                 elif section.name == b'VTXW0000':

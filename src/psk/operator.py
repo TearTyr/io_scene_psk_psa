@@ -74,9 +74,6 @@ class PskImportOperator(Operator, ImportHelper):
         name = os.path.splitext(os.path.basename(self.filepath))[0]
         reader = PskReader()
         psk = reader.read(self.filepath)
-        print(f'points: {psk.points}')
-        print(f'wedges: {psk.wedges}')
-        print(f'bones: {psk.bones}')
         importer = PskImporter()
         importer.import_(context, psk, name)
         return {'FINISHED'}
