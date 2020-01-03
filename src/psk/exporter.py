@@ -23,15 +23,7 @@ class PskExporter(object):
         with open(path, 'wb') as fp:
             self.write_section(fp, b'ACTRHEAD')
             self.write_section(fp, b'PNTS0000', Vector3, self.psk.points)
-
-            # WEDGES
-            # TODO: this really should be on the level of the builder, not the exporter
-            if len(self.psk.wedges) <= 65536:
-                wedge_type = Psk.Wedge16
-            else:
-                wedge_type = Psk.Wedge32
-
-            self.write_section(fp, b'VTXW0000', wedge_type, self.psk.wedges)
+            self.write_section(fp, b'VTXW0000', Psk.get_wedge_type(len(self.psk.wedges)), self.psk.wedges)
             self.write_section(fp, b'FACE0000', Psk.Face, self.psk.faces)
             self.write_section(fp, b'MATT0000', Psk.Material, self.psk.materials)
             self.write_section(fp, b'REFSKELT', Psk.Bone, self.psk.bones)

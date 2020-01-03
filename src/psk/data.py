@@ -23,6 +23,13 @@ class Psk(object):
             ('material_index', c_int32)
         ]
 
+    @staticmethod
+    def get_wedge_type(wedge_count):
+        if wedge_count <= 65536:
+            return Psk.Wedge16
+        else:
+            return Psk.Wedge32
+
     class Face(Structure):
         _fields_ = [
             ('wedge_index_1', c_int16),

@@ -9,16 +9,16 @@ class PskBuilder(object):
         pass
 
     def build(self, context) -> Psk:
-        object = context.view_layer.objects.active
+        mesh_object = context.view_layer.objects.active
 
-        if object.type != 'MESH':
+        if mesh_object.type != 'MESH':
             raise RuntimeError('Selected object must be a mesh')
 
-        if len(object.data.materials) == 0:
+        if len(mesh_object.data.materials) == 0:
             raise RuntimeError('Mesh must have at least one material')
 
         # ensure that there is exactly one armature modifier
-        modifiers = [x for x in object.modifiers if x.type == 'ARMATURE']
+        modifiers = [x for x in mesh_object.modifiers if x.type == 'ARMATURE']
 
         if len(modifiers) != 1:
             raise RuntimeError('Mesh must have one armature modifier')
@@ -29,27 +29,24 @@ class PskBuilder(object):
         if armature_object is None:
             raise RuntimeError('Armature modifier has no linked object')
 
-        # TODO: probably requires at least one bone? not sure
-        mesh_data = object.data
+        # Create a copy of the mesh data with all modifiers applied
+        depsgraph = bpy.context.view_layer.depsgraph
+        depsgraph.update()
+        mesh_object = mesh_object.evaluated_get(depsgraph)
+        mesh_data = bpy.data.meshes.new_from_object(mesh_object, depsgraph=depsgraph)
 
-        # TODO: if there is an edge-split modifier, we need to apply it.
-
-        # TODO: duplicate all the data
-        mesh = bpy.data.meshes.new('export')
-
-        # copy the contents of the mesh
+        # Triangulate the mesh
         bm = bmesh.new()
         bm.from_mesh(mesh_data)
-        # triangulate everything
         bmesh.ops.triangulate(bm, faces=bm.faces)
-        bm.to_mesh(mesh)
+        bm.to_mesh(mesh_data)
         bm.free()
         del bm
 
         psk = Psk()
 
         # VERTICES
-        for vertex in object.data.vertices:
+        for vertex in mesh_data.vertices:
             point = Vector3()
             point.x = vertex.co.x
             point.y = vertex.co.y
@@ -57,14 +54,14 @@ class PskBuilder(object):
             psk.points.append(point)
 
         # WEDGES
-        uv_layer = object.data.uv_layers.active.data
-        if len(object.data.loops) <= 65536:
+        uv_layer = mesh_data.uv_layers.active.data
+        if len(mesh_data.loops) <= 65536:
             wedge_type = Psk.Wedge16
         else:
             wedge_type = Psk.Wedge32
-        psk.wedges = [wedge_type() for _ in range(len(object.data.loops))]
+        psk.wedges = [wedge_type() for _ in range(len(mesh_data.loops))]
 
-        for loop_index, loop in enumerate(object.data.loops):
+        for loop_index, loop in enumerate(mesh_data.loops):
             wedge = psk.wedges[loop_index]
             wedge.material_index = 0
             wedge.point_index = loop.vertex_index
@@ -73,7 +70,9 @@ class PskBuilder(object):
             psk.wedges.append(wedge)
 
         # MATERIALS
-        for i, m in enumerate(object.data.materials):
+        for i, m in enumerate(mesh_data.materials):
+            if m is None:
+                raise RuntimeError(f'Mesh material slots cannot be empty (see material slot {i})')
             material = Psk.Material()
             material.name = bytes(m.name, encoding='utf-8')
             material.texture_index = i
@@ -81,9 +80,9 @@ class PskBuilder(object):
 
         # FACES
         # TODO: this is making the assumption that the mesh is triangulated
-        object.data.calc_loop_triangles()
-        poly_groups, groups = object.data.calc_smooth_groups(use_bitflags=True)
-        for f in object.data.loop_triangles:
+        mesh_data.calc_loop_triangles()
+        poly_groups, groups = mesh_data.calc_smooth_groups(use_bitflags=True)
+        for f in mesh_data.loop_triangles:
             face = Psk.Face()
             face.material_index = f.material_index
             face.wedge_index_1 = f.loops[2]
@@ -137,11 +136,11 @@ class PskBuilder(object):
         # TODO: bone ~> vg might not be 1:1, provide a nice error message if this is the case
         armature = armature_object.data
         bone_names = [x.name for x in armature.bones]
-        vertex_group_names = [x.name for x in object.vertex_groups]
+        vertex_group_names = [x.name for x in mesh_object.vertex_groups]
         bone_indices = [bone_names.index(name) for name in vertex_group_names]
-        for vertex_group_index, vertex_group in enumerate(object.vertex_groups):
+        for vertex_group_index, vertex_group in enumerate(mesh_object.vertex_groups):
             bone_index = bone_indices[vertex_group_index]
-            for vertex_index in range(len(object.data.vertices)):
+            for vertex_index in range(len(mesh_data.vertices)):
                 try:
                     weight = vertex_group.weight(vertex_index)
                 except RuntimeError:
@@ -153,5 +152,8 @@ class PskBuilder(object):
                 w.point_index = vertex_index
                 w.weight = weight
                 psk.weights.append(w)
+
+        # Remove temporary mesh data
+        bpy.data.meshes.remove(mesh_data)
 
         return psk

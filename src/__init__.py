@@ -17,6 +17,8 @@ if 'bpy' in locals():
     importlib.reload(psk_builder)
     importlib.reload(psk_exporter)
     importlib.reload(psk_operator)
+    importlib.reload(psk_reader)
+    importlib.reload(psk_importer)
     importlib.reload(psa_data)
     importlib.reload(psa_builder)
     importlib.reload(psa_exporter)
@@ -27,6 +29,8 @@ else:
     from .psk import builder as psk_builder
     from .psk import exporter as psk_exporter
     from .psk import operator as psk_operator
+    from .psk import reader as psk_reader
+    from .psk import importer as psk_importer
     from .psa import data as psa_data
     from .psa import builder as psa_builder
     from .psa import exporter as psa_exporter
@@ -37,25 +41,31 @@ from bpy.props import IntProperty, CollectionProperty
 
 classes = [
     psk_operator.PskExportOperator,
+    psk_operator.PskImportOperator,
     psa_operator.PsaExportOperator,
     psa_operator.PSA_UL_ActionList,
     psa_operator.ActionListItem
 ]
 
 
-def psk_menu_func(self, context):
+def psk_export_menu_func(self, context):
     self.layout.operator(psk_operator.PskExportOperator.bl_idname, text ='Unreal PSK (.psk)')
 
 
-def psa_menu_func(self, context):
+def psk_import_menu_func(self, context):
+    self.layout.operator(psk_operator.PskImportOperator.bl_idname, text='Unreal PSK (.psk)')
+
+
+def psa_export_menu_func(self, context):
     self.layout.operator(psa_operator.PsaExportOperator.bl_idname, text='Unreal PSA (.psa)')
 
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.TOPBAR_MT_file_export.append(psk_menu_func)
-    bpy.types.TOPBAR_MT_file_export.append(psa_menu_func)
+    bpy.types.TOPBAR_MT_file_export.append(psk_export_menu_func)
+    bpy.types.TOPBAR_MT_file_import.append(psk_import_menu_func)
+    bpy.types.TOPBAR_MT_file_export.append(psa_export_menu_func)
     bpy.types.Scene.psa_action_list = CollectionProperty(type=psa_operator.ActionListItem)
     bpy.types.Scene.psa_action_list_index = IntProperty(name='index for list??', default=0)
 
@@ -63,8 +73,9 @@ def register():
 def unregister():
     del bpy.types.Scene.psa_action_list_index
     del bpy.types.Scene.psa_action_list
-    bpy.types.TOPBAR_MT_file_export.remove(psa_menu_func)
-    bpy.types.TOPBAR_MT_file_export.remove(psk_menu_func)
+    bpy.types.TOPBAR_MT_file_export.remove(psa_export_menu_func)
+    bpy.types.TOPBAR_MT_file_import.remove(psk_import_menu_func)
+    bpy.types.TOPBAR_MT_file_export.remove(psk_export_menu_func)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
