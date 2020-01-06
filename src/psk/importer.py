@@ -2,34 +2,62 @@ import bpy
 import mathutils
 from .data import *
 import bmesh
-import os
 
 
-class PskImporter(object):
+class PskImportOptions(object):
     def __init__(self):
         pass
 
-    '''
-    There are a couple of scenarios that we need to "fix" so that the model can be imported in its entirety.
-    
-    First off, PSKs exported out of umodel technically contain degenerate faces, where 2 of the "wedges" point to
-    the same vertex (eg. a triangle with vertices [A A B]). This is not a valid polygon and therefore cannot
-    be imported directly. The solution here is to replace all duplicate vertex indices with a copy of the duplicated
-    vertex (eg. [A A B] ~> [A Z B] where Z is a new vertex that is a copy of A)
-    
-    The next problem is that there are duplicate faces in exports coming out of the PSK. For example, one of the faces
-    may be [A, B, C], and another is [B, C, A] (or even just [A, B, C]). This is effectively the same face, and Blender
-    understandably disallows this. This is likely related, in some way to the previous problem, and the solution is
-    nearly the same: duplicate one of the vertices to make the face "unique". We need to be able to "hash" the faces
-    regardless of winding order.
-    
-    TODO: note that the hashing mechanism 
-    '''
+
+class PskImporter(object):
+
+    def __init__(self):
+        pass
+
     def fix_degenerate_geometry(self, psk):
+        """
+        There are a couple of scenarios that we need to "fix" so that the model can be imported in its entirety.
+
+        First off, PSKs exported out of umodel technically contain degenerate faces, where 2 of the "wedges" point to
+        the same vertex (eg. a triangle with vertices [A A B]). This is not a valid polygon and therefore cannot
+        be imported directly. The solution here is to replace all duplicate vertex indices with a copy of the duplicated
+        vertex (eg. [A A B] ~> [A Z B] where Z is a new vertex that is a copy of A)
+
+        The next problem is that there are duplicate faces in exports coming out of the PSK. For example, one of the faces
+        may be [A, B, C], and another is [B, C, A] (or even just [A, B, C] again). This is effectively the same face, and Blender
+        understandably disallows this. This is likely related, in some way to the previous problem, and the solution is
+        nearly the same: duplicate one of the vertices to make the face "unique".
+
+        We need to be able to "hash" the faces regardless of winding order.
+
+        TODO: note that the face hashing mechanism will break down after ~2 million vertices. it also assumes 64-bit integers.
+        """
         def replace_vertices(vertex_indices: List[int]):
             yield False
             yield vertex_indices[1] == vertex_indices[0]
             yield vertex_indices[2] == vertex_indices[0] or vertex_indices[2] == vertex_indices[1]
+
+        def get_face_hash(vertex_indices):
+            return (vertex_indices[0] & 0x1FFFFF) | ((vertex_indices[1] & 0x1FFFFF) << 21) | ((vertex_indices[2] & 0x1FFFFF) << 42)
+
+        def copy_point(point_index: int) -> int:
+            new_point_index = len(psk.points)
+            point = psk.points[point_index]
+            new_point = Vector3()
+            new_point.x = point.x
+            new_point.y = point.y
+            new_point.z = point.z
+            psk.points.append(new_point)
+            # Duplicate vertex weights
+            for weight in psk.weights:
+                if weight.point_index == point_index:
+                    new_weight = Psk.Weight()
+                    new_weight.weight = weight.weight
+                    new_weight.point_index = new_point_index
+                    new_weight.bone_index = weight.bone_index
+                    psk.weights.append(new_weight)
+            return new_point_index
+
         # TODO: ensure that the same vertices are not used on a per-face basis (create new duplicate vertices)
         face_hashes = set()
         for psk_face in psk.faces:
@@ -40,39 +68,23 @@ class PskImporter(object):
             if len(set(vertex_indices)) < 3:
                 for i, should_replace in enumerate(replace_vertices(vertex_indices)):
                     if should_replace:
-                        point = psk.points[vertex_indices[i]]
-                        new_point = Vector3()
-                        new_point.x = point.x
-                        new_point.y = point.y
-                        new_point.z = point.z
-                        wedges[i].point_index = len(psk.points)
-                        psk.points.append(new_point)
-            # Find the lowest value and choose a pivot point
+                        new_point_index = copy_point(vertex_indices[i])
+                        wedges[i].point_index = new_point_index
+                        vertex_indices[i] = new_point_index
+            # Find the lowest point index and choose that as the pivot point
             min_vertex_index = min(vertex_indices)
             pivot_index = vertex_indices.index(min_vertex_index)
             vertex_indices = [vertex_indices[i % 3] for i in range(pivot_index, pivot_index + 3)]
-            face_hash = (vertex_indices[0] & 0x1FFFFF) | ((vertex_indices[1] & 0x1FFFFF) << 21) | ((vertex_indices[2] & 0x1FFFFF) << 42)
+            face_hash = get_face_hash(vertex_indices)
             if face_hash in face_hashes:
-                point_index = wedges[pivot_index].point_index
-                point = psk.points[point_index]
-                new_point = Vector3()
-                new_point.x = point.x
-                new_point.y = point.y
-                new_point.z = point.z
-                new_point_index = len(psk.point)
+                new_point_index = copy_point(wedges[pivot_index].point_index)
                 wedges[pivot_index].point_index = new_point_index
-                psk.points.append(new_point)
                 # Update the vertex index (0-index is the pivot index) and recalculate the face hash.
                 # NOTE: this is technically unnecessary, but for completeness this should be done.
                 vertex_indices[0] = new_point_index
                 # Recalculate the face hash
-                face_hash = (vertex_indices[0] & 0x1FFFFF) | ((vertex_indices[1] & 0x1FFFFF) << 21) | (
-                            (vertex_indices[2] & 0x1FFFFF) << 42)
+                face_hash = get_face_hash(vertex_indices)
             face_hashes.add(face_hash)
-            # TODO: sort the vertex indices, hash them somehow (assuming 64-bit ints, use 21-bits?), and store it in a
-            # set; if it already exists in the set, then create a single new vertex and update the refs
-
-
 
     def import_(self, context, psk: Psk, name: str):
 
@@ -99,6 +111,7 @@ class PskImporter(object):
             rotation_matrix = rotation.to_matrix().to_4x4()
             bone_matrix = rotation_matrix @ translation_matrix
 
+            # TODO: this is all wrong, probably needs to take parent matrix into account.
             bone = edit_bones.new(psk_bone.name.decode('utf-8'))
             bone.head = (0, 0, 0)
             bone.tail = (0, 0, 1)
@@ -181,7 +194,10 @@ class PskImporter(object):
         del bm
         bpy.ops.object.mode_set(mode='OBJECT')
 
-        # TODO: WEIGHTS! (next)
+        # WEIGHTS
+        bone_names = [b.name.decode('utf-8') for b in psk.bones]
+        for weight in psk.weights:
+            mesh_object.vertex_groups[bone_names[weight.bone_index]].add([weight.point_index], weight.weight, 'REPLACE')
 
         mesh.validate(clean_customdata=False)
         mesh.update(calc_edges=False)
