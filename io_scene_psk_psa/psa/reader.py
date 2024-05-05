@@ -1,5 +1,7 @@
 import ctypes
 
+from typing import List, Optional
+
 import numpy as np
 
 from .data import *
