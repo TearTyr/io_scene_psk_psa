@@ -43,6 +43,12 @@ if 'bpy' in locals():
     importlib.reload(psa_import_properties)
     importlib.reload(psa_import_operators)
     importlib.reload(psa_import_ui)
+
+    importlib.reload(combine_psk_and_gltf)
+    importlib.reload(export_as_fbx)
+
+    importlib.reload(psk_psa_import_export)
+
 else:
     # if i remove this line, it can be enabled just fine
     from . import data as psx_data
@@ -72,6 +78,12 @@ else:
     from .psa.import_ import properties as psa_import_properties
     from .psa.import_ import operators as psa_import_operators
     from .psa.import_ import ui as psa_import_ui
+
+    from .tool import combine_psk_and_gltf
+    from .tool import export_as_fbx
+
+    from . import psk_psa_import_export
+
 
 import bpy
 from bpy.props import PointerProperty
@@ -119,6 +131,9 @@ def register():
     bpy.types.Scene.psa_export = PointerProperty(type=psa_export_properties.PSA_PG_export)
     bpy.types.Scene.psk_export = PointerProperty(type=psk_export_properties.PSK_PG_export)
     bpy.types.Action.psa_export = PointerProperty(type=psx_types.PSX_PG_action_export)
+    psk_psa_import_export.register()
+    combine_psk_and_gltf.register()
+    export_as_fbx.register()
 
 
 def unregister():
@@ -131,6 +146,9 @@ def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(psk_import_menu_func)
     bpy.types.TOPBAR_MT_file_export.remove(psa_export_menu_func)
     bpy.types.TOPBAR_MT_file_import.remove(psa_import_menu_func)
+    psk_psa_import_export.unregister()
+    combine_psk_and_gltf.unregister()
+    export_as_fbx.unregister()
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 

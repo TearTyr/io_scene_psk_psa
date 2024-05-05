@@ -6,6 +6,8 @@ import addon_utils
 import bpy.types
 from bpy.types import NlaStrip, Object, AnimData
 
+def util_bytes_to_str(in_bytes):
+    return in_bytes.rstrip(b'\x00').decode(encoding='cp1252', errors='replace')
 
 def rgb_to_srgb(c: float):
     if c > 0.0031308:
