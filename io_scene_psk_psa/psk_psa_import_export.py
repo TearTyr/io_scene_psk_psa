@@ -45,7 +45,17 @@ def register():
     bpy.types.Scene.psa_export = PointerProperty(type=PSA_PG_export)
 
 def unregister():
-    bpy.utils.unregister_class(PSK_PSA_PT_import_export_panel)
-    del bpy.types.Scene.psk_export
-    del bpy.types.Scene.psa_import
-    del bpy.types.Scene.psa_export
+    try:
+        bpy.utils.unregister_class(PSK_PSA_PT_import_export_panel)
+    except RuntimeError as e:
+        if str(e) == f"bpy_struct \"{'PSK_PSA_PT_import_export_panel'}\" not registered":
+            # This class is not registered, skip it
+            pass
+        else:
+            raise e
+    if "psk_export" in dir(bpy.types.Scene):
+        del bpy.types.Scene.psk_export
+    if "psa_import" in dir(bpy.types.Scene):
+        del bpy.types.Scene.psa_import
+    if "psa_export" in dir(bpy.types.Scene):
+        del bpy.types.Scene.psa_export

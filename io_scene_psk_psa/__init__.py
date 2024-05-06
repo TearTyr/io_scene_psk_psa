@@ -120,8 +120,15 @@ def psa_import_menu_func(self, context):
 
 
 def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
+    try:
+        for cls in classes:
+            bpy.utils.register_class(cls)
+    except ValueError as e:
+        if str(e) == f"bpy_struct \"{'PSX_PG_action_export'}\" is already registered":
+            # This class is already registered, skip it
+            pass
+        else:
+            raise e
     bpy.types.TOPBAR_MT_file_export.append(psk_export_menu_func)
     bpy.types.TOPBAR_MT_file_import.append(psk_import_menu_func)
     bpy.types.TOPBAR_MT_file_export.append(psa_export_menu_func)
@@ -137,20 +144,33 @@ def register():
 
 
 def unregister():
-    del bpy.types.Material.psk
-    del bpy.types.Scene.psa_import
-    del bpy.types.Scene.psa_export
-    del bpy.types.Scene.psk_export
-    del bpy.types.Action.psa_export
+    if hasattr(bpy.types.Scene, 'psk_export'):
+        del bpy.types.Scene.psk_export
+    if hasattr(bpy.types.Scene, 'psa_import'):
+        del bpy.types.Scene.psa_import
+    if hasattr(bpy.types.Scene, 'psa_export'):
+        del bpy.types.Scene.psa_export
+    if hasattr(bpy.types.Action, 'psa_export'):
+        del bpy.types.Action.psa_export
+
     bpy.types.TOPBAR_MT_file_export.remove(psk_export_menu_func)
     bpy.types.TOPBAR_MT_file_import.remove(psk_import_menu_func)
     bpy.types.TOPBAR_MT_file_export.remove(psa_export_menu_func)
     bpy.types.TOPBAR_MT_file_import.remove(psa_import_menu_func)
+
     psk_psa_import_export.unregister()
     combine_psk_and_gltf.unregister()
     export_as_fbx.unregister()
+
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError as e:
+            if str(e) == f"bpy_struct \"{'PSX_PG_action_export'}\" not registered":
+                # This class is not registered, skip it
+                pass
+            else:
+                raise e
 
 
 if __name__ == '__main__':

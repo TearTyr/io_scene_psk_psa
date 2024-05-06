@@ -48,32 +48,40 @@ def combine_psk_and_gltf(psk_armature, gltf_armature):
     mode = bpy.context.object.mode
     bpy.ops.object.mode_set(mode='OBJECT')
 
-    #deselect all
+    # Deselect all
     for obj in bpy.context.scene.objects:
-        obj.select_set(False)    
-    
-    #get objects
+        obj.select_set(False)
+
+    # Get objects
     psk_mesh, psk_materials = get_children(psk_armature)
     gltf_mesh, _ = get_children(gltf_armature)
-    
-    psk_collection=psk_armature.users_collection
-    gltf_collection=gltf_armature.users_collection
-    
-    replace_materials(gltf_mesh, psk_materials)
 
-    gltf_mesh.parent = psk_armature
-    gltf_armature_modifier = get_armature_modifier(gltf_mesh)
+    psk_collection = psk_armature.users_collection
+    gltf_collection = gltf_armature.users_collection
+
+    # Determine which mesh to keep
+    if '.001' in psk_mesh.name:
+        keep_mesh = gltf_mesh
+        delete_mesh = psk_mesh
+    else:
+        keep_mesh = psk_mesh
+        delete_mesh = gltf_mesh
+
+    replace_materials(keep_mesh, psk_materials)
+
+    keep_mesh.parent = psk_armature
+    gltf_armature_modifier = get_armature_modifier(keep_mesh)
     gltf_armature_modifier.object = psk_armature
 
     for col in gltf_collection:
-        col.objects.unlink(gltf_mesh)
+        col.objects.unlink(delete_mesh)
     for col in psk_collection:
-        col.objects.link(gltf_mesh)
+        col.objects.link(keep_mesh)
 
     gltf_armature.select_set(True)
-    psk_mesh.select_set(True)
+    delete_mesh.select_set(True)
     bpy.ops.object.delete()
-    
+
     bpy.ops.object.mode_set(mode=mode)
     
 
