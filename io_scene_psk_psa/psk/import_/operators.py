@@ -2,24 +2,13 @@ import os
 import sys
 
 from bpy.props import StringProperty, BoolProperty, EnumProperty, FloatProperty
-from bpy.types import Operator, FileHandler, Context
-from bpy_extras.io_utils import ImportHelper
+from bpy.types import Operator, PropertyGroup
+from bpy_extras.io_utils import ImportHelper, axis_conversion
 
 from ..importer import PskImportOptions, import_psk
 from ..reader import read_psk
 
 empty_set = set()
-
-
-class PSK_FH_import(FileHandler):
-    bl_idname = 'PSK_FH_import'
-    bl_label = 'File handler for Unreal PSK/PSKX import'
-    bl_import_operator = 'import_scene.psk'
-    bl_file_extensions = '.psk;.pskx'
-
-    @classmethod
-    def poll_drop(cls, context: Context):
-        return context.area and context.area.type == 'VIEW_3D'
 
 
 class PSK_OT_import(Operator, ImportHelper):
@@ -143,11 +132,11 @@ class PSK_OT_import(Operator, ImportHelper):
         col.use_property_decorate = False
         col.prop(self, 'scale')
 
-        mesh_header, mesh_panel = layout.panel('mesh_panel_id', default_closed=False)
-        mesh_header.prop(self, 'should_import_mesh')
+        mesh_box = layout.box()
+        mesh_box.prop(self, 'should_import_mesh', toggle=True)
 
-        if mesh_panel and self.should_import_mesh:
-            row = mesh_panel.row()
+        if self.should_import_mesh:
+            row = mesh_box.row()
             col = row.column()
             col.use_property_split = True
             col.use_property_decorate = False
@@ -159,11 +148,11 @@ class PSK_OT_import(Operator, ImportHelper):
                 col.prop(self, 'vertex_color_space')
             col.prop(self, 'should_import_shape_keys', text='Shape Keys')
 
-        skeleton_header, skeleton_panel = layout.panel('skeleton_panel_id', default_closed=False)
-        skeleton_header.prop(self, 'should_import_skeleton')
+        skeleton_box = layout.box()
+        skeleton_box.prop(self, 'should_import_skeleton', toggle=True)
 
-        if skeleton_panel and self.should_import_skeleton:
-            row = skeleton_panel.row()
+        if self.should_import_skeleton:
+            row = skeleton_box.row()
             col = row.column()
             col.use_property_split = True
             col.use_property_decorate = False
@@ -172,5 +161,4 @@ class PSK_OT_import(Operator, ImportHelper):
 
 classes = (
     PSK_OT_import,
-    PSK_FH_import,
 )

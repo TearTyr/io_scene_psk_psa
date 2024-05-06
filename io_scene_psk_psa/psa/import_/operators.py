@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 from bpy.props import StringProperty
-from bpy.types import Operator, Event, Context, FileHandler
+from bpy.types import Operator, Event, Context
 from bpy_extras.io_utils import ImportHelper
 
 from .properties import get_visible_sequences
@@ -108,7 +108,6 @@ def load_psa_file(context, filepath: str):
         pg.psa_error = str(e)
 
 
-
 def on_psa_file_path_updated(cls, context):
     load_psa_file(context, cls.filepath)
 
@@ -190,45 +189,44 @@ class PSA_OT_import(Operator, ImportHelper):
         layout = self.layout
         pg = getattr(context.scene, 'psa_import')
 
-        sequences_header, sequences_panel = layout.panel('sequences_panel_id', default_closed=False)
-        sequences_header.label(text='Sequences')
+        sequences_box = layout.box()
+        sequences_box.label(text='Sequences')
 
-        if sequences_panel:
-            if pg.psa_error:
-                row = sequences_panel.row()
-                row.label(text='Select a PSA file', icon='ERROR')
-            else:
-                # Select buttons.
-                rows = max(3, min(len(pg.sequence_list), 10))
+        if pg.psa_error:
+            row = sequences_box.row()
+            row.label(text='Select a PSA file', icon='ERROR')
+        else:
+            # Select buttons.
+            rows = max(3, min(len(pg.sequence_list), 10))
 
-                row = sequences_panel.row()
-                col = row.column()
+            row = sequences_box.row()
+            col = row.column()
 
-                row2 = col.row(align=True)
-                row2.label(text='Select')
-                row2.operator(PSA_OT_import_sequences_from_text.bl_idname, text='', icon='TEXT')
-                row2.operator(PSA_OT_import_sequences_select_all.bl_idname, text='All', icon='CHECKBOX_HLT')
-                row2.operator(PSA_OT_import_sequences_deselect_all.bl_idname, text='None', icon='CHECKBOX_DEHLT')
+            row2 = col.row(align=True)
+            row2.label(text='Select')
+            row2.operator(PSA_OT_import_sequences_from_text.bl_idname, text='', icon='TEXT')
+            row2.operator(PSA_OT_import_sequences_select_all.bl_idname, text='All', icon='CHECKBOX_HLT')
+            row2.operator(PSA_OT_import_sequences_deselect_all.bl_idname, text='None', icon='CHECKBOX_DEHLT')
 
-                col = col.row()
-                col.template_list('PSA_UL_import_sequences', '', pg, 'sequence_list', pg, 'sequence_list_index', rows=rows)
+            col = col.row()
+            col.template_list('PSA_UL_import_sequences', '', pg, 'sequence_list', pg, 'sequence_list_index', rows=rows)
 
-            col = sequences_panel.column(heading='')
-            col.use_property_split = True
-            col.use_property_decorate = False
-            col.prop(pg, 'fps_source')
-            if pg.fps_source == 'CUSTOM':
-                col.prop(pg, 'fps_custom')
-            col.prop(pg, 'should_overwrite')
-            col.prop(pg, 'should_use_action_name_prefix')
-            if pg.should_use_action_name_prefix:
-                col.prop(pg, 'action_name_prefix')
+        col = sequences_box.column(heading='')
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(pg, 'fps_source')
+        if pg.fps_source == 'CUSTOM':
+            col.prop(pg, 'fps_custom')
+        col.prop(pg, 'should_overwrite')
+        col.prop(pg, 'should_use_action_name_prefix')
+        if pg.should_use_action_name_prefix:
+            col.prop(pg, 'action_name_prefix')
 
-        data_header, data_panel = layout.panel('data_panel_id', default_closed=False)
-        data_header.label(text='Data')
+        data_box = layout.box()
+        data_box.label(text='Data')
 
-        if data_panel:
-            col = data_panel.column(heading='Write')
+        if data_box:
+            col = data_box.column(heading='Write')
             col.use_property_split = True
             col.use_property_decorate = False
             col.prop(pg, 'should_write_keyframes')
@@ -240,16 +238,16 @@ class PSA_OT_import(Operator, ImportHelper):
                 col.use_property_decorate = False
                 col.prop(pg, 'should_convert_to_samples')
 
-        advanced_header, advanced_panel = layout.panel('advanced_panel_id', default_closed=True)
-        advanced_header.label(text='Advanced')
+        advanced_box = layout.box()
+        advanced_box.label(text='Advanced')
 
-        if advanced_panel:
-            col = advanced_panel.column()
+        if advanced_box:
+            col = advanced_box.column()
             col.use_property_split = True
             col.use_property_decorate = False
             col.prop(pg, 'bone_mapping_mode')
 
-            col = advanced_panel.column(heading='Options')
+            col = advanced_box.column(heading='Options')
             col.use_property_split = True
             col.use_property_decorate = False
             col.prop(pg, 'should_use_fake_user')
@@ -257,21 +255,9 @@ class PSA_OT_import(Operator, ImportHelper):
             col.prop(pg, 'should_use_config_file')
 
 
-class PSA_FH_import(FileHandler):
-    bl_idname = 'PSA_FH_import'
-    bl_label = 'File handler for Unreal PSA import'
-    bl_import_operator = 'psa_import.import'
-    bl_file_extensions = '.psa'
-
-    @classmethod
-    def poll_drop(cls, context: Context):
-        return context.area and context.area.type == 'VIEW_3D'
-
-
 classes = (
     PSA_OT_import_sequences_select_all,
     PSA_OT_import_sequences_deselect_all,
     PSA_OT_import_sequences_from_text,
     PSA_OT_import,
-    PSA_FH_import,
 )

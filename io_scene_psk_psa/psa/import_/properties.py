@@ -24,65 +24,107 @@ class PSA_PG_data(PropertyGroup):
 
 
 class PSA_PG_import(PropertyGroup):
-    psa_error: StringProperty(default='')
+    psa_error: StringProperty(default="")
     psa: PointerProperty(type=PSA_PG_data)
     sequence_list: CollectionProperty(type=PSA_PG_import_action_list_item)
-    sequence_list_index: IntProperty(name='', default=0)
-    should_use_fake_user: BoolProperty(default=True, name='Fake User',
-                                       description='Assign each imported action a fake user so that the data block is '
-                                                   'saved even it has no users',
-                                       options=empty_set)
-    should_use_config_file: BoolProperty(default=True, name='Use Config File',
-                                            description='Use the .config file that is sometimes generated when the PSA '
-                                                        'file is exported from UEViewer. This file contains '
-                                                        'options that can be used to filter out certain bones tracks '
-                                                        'from the imported actions',
-                                            options=empty_set)
-    should_stash: BoolProperty(default=False, name='Stash',
-                               description='Stash each imported action as a strip on a new non-contributing NLA track',
-                               options=empty_set)
-    should_use_action_name_prefix: BoolProperty(default=False, name='Prefix Action Name', options=empty_set)
-    action_name_prefix: StringProperty(default='', name='Prefix', options=empty_set)
-    should_overwrite: BoolProperty(default=False, name='Overwrite', options=empty_set,
-                                   description='If an action with a matching name already exists, the existing action '
-                                               'will have it\'s data overwritten instead of a new action being created')
-    should_write_keyframes: BoolProperty(default=True, name='Keyframes', options=empty_set)
-    should_write_metadata: BoolProperty(default=True, name='Metadata', options=empty_set,
-                                        description='Additional data will be written to the custom properties of the '
-                                                    'Action (e.g., frame rate)')
-    sequence_filter_name: StringProperty(default='', options={'TEXTEDIT_UPDATE'})
-    sequence_filter_is_selected: BoolProperty(default=False, options=empty_set, name='Only Show Selected',
-                                              description='Only show selected sequences')
+    sequence_list_index: IntProperty(name="", default=0)
+    should_use_fake_user: BoolProperty(
+        default=True,
+        name="Fake User",
+        description="Assign each imported action a fake user so that the data block is saved even it has no users",
+        options=empty_set,
+    )
+    should_use_config_file: BoolProperty(
+        default=True,
+        name="Use Config File",
+        description="Use the .config file that is sometimes generated when the PSA file is exported from UEViewer. This file contains options that can be used to filter out certain bones tracks from the imported actions",
+        options=empty_set,
+    )
+    should_stash: BoolProperty(
+        default=False,
+        name="Stash",
+        description="Stash each imported action as a strip on a new non-contributing NLA track",
+        options=empty_set,
+    )
+    should_use_action_name_prefix: BoolProperty(
+        default=False, name="Prefix Action Name", options=empty_set
+    )
+    action_name_prefix: StringProperty(default="", name="Prefix", options=empty_set)
+    should_overwrite: BoolProperty(
+        default=False,
+        name="Overwrite",
+        options=empty_set,
+        description="If an action with a matching name already exists, the existing action will have it's data overwritten instead of a new action being created",
+    )
+    should_write_keyframes: BoolProperty(
+        default=True, name="Keyframes", options=empty_set
+    )
+    should_write_metadata: BoolProperty(
+        default=True,
+        name="Metadata",
+        description="Additional data will be written to the custom properties of the Action (e.g., frame rate)",
+        options=empty_set,
+    )
+    sequence_filter_name: StringProperty(default="", options={"TEXTEDIT_UPDATE"})
+    sequence_filter_is_selected: BoolProperty(
+        default=False,
+        options=empty_set,
+        name="Only Show Selected",
+        description="Only show selected sequences",
+    )
     sequence_use_filter_invert: BoolProperty(default=False, options=empty_set)
-    sequence_use_filter_regex: BoolProperty(default=False, name='Regular Expression',
-                                            description='Filter using regular expressions', options=empty_set)
+    sequence_use_filter_regex: BoolProperty(
+        default=False,
+        name="Regular Expression",
+        description="Filter using regular expressions",
+        options=empty_set,
+    )
     select_text: PointerProperty(type=Text)
     should_convert_to_samples: BoolProperty(
         default=False,
-        name='Convert to Samples',
-        description='Convert keyframes to read-only samples. '
-                    'Recommended if you do not plan on editing the actions directly'
+        name="Convert to Samples",
+        description="Convert keyframes to read-only samples. Recommended if you do not plan on editing the actions directly",
     )
     bone_mapping_mode: EnumProperty(
-        name='Bone Mapping',
+        name="Bone Mapping",
         options=empty_set,
-        description='The method by which bones from the incoming PSA file are mapped to the armature',
+        description="The method by which bones from the incoming PSA file are mapped to the armature",
         items=(
-            ('EXACT', 'Exact', 'Bone names must match exactly.', 'EXACT', 0),
-            ('CASE_INSENSITIVE', 'Case Insensitive', 'Bones names must match, ignoring case (e.g., the bone PSA bone '
-             '\'root\' can be mapped to the armature bone \'Root\')', 'CASE_INSENSITIVE', 1),
+            ("EXACT", "Exact", "Bone names must match exactly.", "EXACT", 0),
+            (
+                "CASE_INSENSITIVE",
+                "Case Insensitive",
+                "Bones names must match, ignoring case (e.g., the bone PSA bone 'root' can be mapped to the armature bone 'Root')",
+                "CASE_INSENSITIVE",
+                1,
+            ),
         ),
-        default='CASE_INSENSITIVE'
+        default="CASE_INSENSITIVE",
     )
-    fps_source: EnumProperty(name='FPS Source', items=(
-        ('SEQUENCE', 'Sequence', 'The sequence frame rate matches the original frame rate', 'ACTION', 0),
-        ('SCENE', 'Scene', 'The sequence is resampled to the frame rate of the scene', 'SCENE_DATA', 1),
-        ('CUSTOM', 'Custom', 'The sequence is resampled to a custom frame rate', 2),
-    ))
+    fps_source: EnumProperty(
+        name="FPS Source",
+        items=(
+            (
+                "SEQUENCE",
+                "Sequence",
+                "The sequence frame rate matches the original frame rate",
+                "ACTION",
+                0,
+            ),
+            (
+                "SCENE",
+                "Scene",
+                "The sequence is resampled to the frame rate of the scene",
+                "SCENE_DATA",
+                1,
+            ),
+            ("CUSTOM", "Custom", "The sequence is resampled to a custom frame rate", 2),
+        ),
+    )
     fps_custom: FloatProperty(
         default=30.0,
-        name='Custom FPS',
-        description='The frame rate to which the imported sequences will be resampled to',
+        name="Custom FPS",
+        description="The frame rate to which the imported sequences will be resampled to",
         options=empty_set,
         min=1.0,
         soft_min=1.0,
