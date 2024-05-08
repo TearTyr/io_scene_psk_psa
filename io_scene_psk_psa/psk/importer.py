@@ -14,6 +14,7 @@ from ..helpers import rgb_to_srgb, is_bdk_addon_loaded
 class PskImportOptions:
     def __init__(self):
         self.name = ''
+        self.change_rig_name = True  # New property
         self.should_import_mesh = True
         self.should_reuse_materials = True
         self.should_import_vertex_colors = True
@@ -25,7 +26,6 @@ class PskImportOptions:
         self.bone_length = 1.0
         self.should_import_materials = True
         self.scale = 1.0
-        self.change_rig_name = True  # New property
 
 
 class ImportBone:
