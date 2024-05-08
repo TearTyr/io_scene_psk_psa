@@ -1,0 +1,1456 @@
+Folder Name: psk
+
+Python Scripts:
+- __init__.py
+  Content:
+
+
+- builder.py
+  Content:
+from typing import Optional
+
+import bmesh
+import bpy
+import numpy as np
+from bpy.types import Armature, Material
+
+from .data import *
+from .properties import triangle_type_and_bit_flags_to_poly_flags
+from ..helpers import *
+
+
+class PskInputObjects(object):
+    def __init__(self):
+        self.mesh_objects = []
+        self.armature_object: Optional[Object] = None
+
+
+class PskBuildOptions(object):
+    def __init__(self):
+        self.bone_filter_mode = 'ALL'
+        self.bone_collection_indices: List[int] = []
+        self.use_raw_mesh_data = True
+        self.materials: List[Material] = []
+        self.should_enforce_bone_name_restrictions = False
+
+
+def get_psk_input_objects(context) -> PskInputObjects:
+    input_objects = PskInputObjects()
+    for selected_object in context.view_layer.objects.selected:
+        if selected_object.type != 'MESH':
+            raise RuntimeError(f'Selected object "{selected_object.name}" is not a mesh')
+
+    input_objects.mesh_objects = context.view_layer.objects.selected
+
+    if len(input_objects.mesh_objects) == 0:
+        raise RuntimeError('At least one mesh must be selected')
+
+    for mesh_object in input_objects.mesh_objects:
+        if len(mesh_object.data.materials) == 0:
+            raise RuntimeError(f'Mesh "{mesh_object.name}" must have at least one material')
+
+    # Ensure that there are either no armature modifiers (static mesh)
+    # or that there is exactly one armature modifier object shared between
+    # all selected meshes
+    armature_modifier_objects = set()
+
+    for mesh_object in input_objects.mesh_objects:
+        modifiers = [x for x in mesh_object.modifiers if x.type == 'ARMATURE']
+        if len(modifiers) == 0:
+            continue
+        elif len(modifiers) > 1:
+            raise RuntimeError(f'Mesh "{mesh_object.name}" must have only one armature modifier')
+        armature_modifier_objects.add(modifiers[0].object)
+
+    if len(armature_modifier_objects) > 1:
+        armature_modifier_names = [x.name for x in armature_modifier_objects]
+        raise RuntimeError(f'All selected meshes must have the same armature modifier, encountered {len(armature_modifier_names)} ({", ".join(armature_modifier_names)})')
+    elif len(armature_modifier_objects) == 1:
+        input_objects.armature_object = list(armature_modifier_objects)[0]
+
+    return input_objects
+
+
+class PskBuildResult(object):
+    def __init__(self):
+        self.psk = None
+        self.warnings: List[str] = []
+
+
+def change_rig_name(context, psk):
+    """
+    Change the rig name to "Armature" if the checkbox is checked.
+    """
+    pg = getattr(context.scene, 'psk_export')
+    if pg.change_rig_name:
+        if psk.armature_object is not None:
+            psk.armature_object.name = "Armature"
+            
+
+def build_psk(context, options: PskBuildOptions) -> PskBuildResult:
+    input_objects = get_psk_input_objects(context)
+    armature_object: bpy.types.Object = input_objects.armature_object
+
+    result = PskBuildResult()
+    psk = Psk()
+    bones = []
+
+    if armature_object is None or len(armature_object.data.bones) == 0:
+        # If the mesh has no armature object or no bones, simply assign it a dummy bone at the root to satisfy the
+        # requirement that a PSK file must have at least one bone.
+        psk_bone = Psk.Bone()
+        psk_bone.name = bytes('root', encoding='windows-1252')
+        psk_bone.flags = 0
+        psk_bone.children_count = 0
+        psk_bone.parent_index = 0
+        psk_bone.location = Vector3.zero()
+        psk_bone.rotation = Quaternion.identity()
+        psk.bones.append(psk_bone)
+    else:
+        bone_names = get_export_bone_names(armature_object, options.bone_filter_mode, options.bone_collection_indices)
+        armature_data = typing.cast(Armature, armature_object.data)
+        bones = [armature_data.bones[bone_name] for bone_name in bone_names]
+
+        # Check that all bone names are valid.
+        if options.should_enforce_bone_name_restrictions:
+            check_bone_names(map(lambda x: x.name, bones))
+
+        for bone in bones:
+            psk_bone = Psk.Bone()
+            try:
+                psk_bone.name = bytes(bone.name, encoding='windows-1252')
+            except UnicodeEncodeError:
+                raise RuntimeError(
+                    f'Bone name "{bone.name}" contains characters that cannot be encoded in the Windows-1252 codepage')
+            psk_bone.flags = 0
+            psk_bone.children_count = 0
+
+            try:
+                parent_index = bones.index(bone.parent)
+                psk_bone.parent_index = parent_index
+                psk.bones[parent_index].children_count += 1
+            except ValueError:
+                psk_bone.parent_index = 0
+
+            if bone.parent is not None:
+                rotation = bone.matrix.to_quaternion().conjugated()
+                inverse_parent_rotation = bone.parent.matrix.to_quaternion().inverted()
+                parent_head = inverse_parent_rotation @ bone.parent.head
+                parent_tail = inverse_parent_rotation @ bone.parent.tail
+                location = (parent_tail - parent_head) + bone.head
+            else:
+                armature_local_matrix = armature_object.matrix_local
+                location = armature_local_matrix @ bone.head
+                bone_rotation = bone.matrix.to_quaternion().conjugated()
+                local_rotation = armature_local_matrix.to_3x3().to_quaternion().conjugated()
+                rotation = bone_rotation @ local_rotation
+                rotation.conjugate()
+
+            psk_bone.location.x = location.x
+            psk_bone.location.y = location.y
+            psk_bone.location.z = location.z
+
+            psk_bone.rotation.w = rotation.w
+            psk_bone.rotation.x = rotation.x
+            psk_bone.rotation.y = rotation.y
+            psk_bone.rotation.z = rotation.z
+
+            psk.bones.append(psk_bone)
+
+    # MATERIALS
+    for material in options.materials:
+        psk_material = Psk.Material()
+        try:
+            psk_material.name = bytes(material.name, encoding='windows-1252')
+        except UnicodeEncodeError:
+            raise RuntimeError(f'Material name "{material.name}" contains characters that cannot be encoded in the Windows-1252 codepage')
+        psk_material.texture_index = len(psk.materials)
+        psk_material.poly_flags = triangle_type_and_bit_flags_to_poly_flags(material.psk.mesh_triangle_type,
+                                                                            material.psk.mesh_triangle_bit_flags)
+        psk.materials.append(psk_material)
+
+    context.window_manager.progress_begin(0, len(input_objects.mesh_objects))
+
+    material_names = [m.name for m in options.materials]
+
+    for object_index, input_mesh_object in enumerate(input_objects.mesh_objects):
+
+        should_flip_normals = False
+
+        # MATERIALS
+        material_indices = [material_names.index(material_slot.material.name) for material_slot in input_mesh_object.material_slots]
+
+        # MESH DATA
+        if options.use_raw_mesh_data:
+            mesh_object = input_mesh_object
+            mesh_data = input_mesh_object.data
+        else:
+            # Create a copy of the mesh object after non-armature modifiers are applied.
+
+            # Temporarily force the armature into the rest position.
+            # We will undo this later.
+            old_pose_position = None
+            if armature_object is not None:
+                old_pose_position = armature_object.data.pose_position
+                armature_object.data.pose_position = 'REST'
+
+            depsgraph = context.evaluated_depsgraph_get()
+            bm = bmesh.new()
+            bm.from_object(input_mesh_object, depsgraph)
+            mesh_data = bpy.data.meshes.new('')
+            bm.to_mesh(mesh_data)
+            del bm
+            mesh_object = bpy.data.objects.new('', mesh_data)
+            mesh_object.matrix_world = input_mesh_object.matrix_world
+
+            scale = (input_mesh_object.scale.x, input_mesh_object.scale.y, input_mesh_object.scale.z)
+
+            # Negative scaling in Blender results in inverted normals after the scale is applied. However, if the scale
+            # is not applied, the normals will appear unaffected in the viewport. The evaluated mesh data used in the
+            # export will have the scale applied, but this behavior is not obvious to the user.
+            #
+            # In order to have the exporter be as WYSIWYG as possible, we need to check for negative scaling and invert
+            # the normals if necessary. If two axes have negative scaling and the third has positive scaling, the
+            # normals will be correct. We can detect this by checking if the number of negative scaling axes is odd. If
+            # it is, we need to invert the normals of the mesh by swapping the order of the vertices in each face.
+            should_flip_normals = sum(1 for x in scale if x < 0) % 2 == 1
+
+            # Copy the vertex groups
+            for vertex_group in input_mesh_object.vertex_groups:
+                mesh_object.vertex_groups.new(name=vertex_group.name)
+
+            # Restore the previous pose position on the armature.
+            if old_pose_position is not None:
+                armature_object.data.pose_position = old_pose_position
+
+        vertex_offset = len(psk.points)
+
+        # VERTICES
+        for vertex in mesh_data.vertices:
+            point = Vector3()
+            v = mesh_object.matrix_world @ vertex.co
+            point.x = v.x
+            point.y = v.y
+            point.z = v.z
+            psk.points.append(point)
+
+        uv_layer = mesh_data.uv_layers.active.data
+
+        # WEDGES
+        mesh_data.calc_loop_triangles()
+
+        # Build a list of non-unique wedges.
+        wedges = []
+        for loop_index, loop in enumerate(mesh_data.loops):
+            wedges.append(Psk.Wedge(
+                point_index=loop.vertex_index + vertex_offset,
+                u=uv_layer[loop_index].uv[0],
+                v=1.0 - uv_layer[loop_index].uv[1]
+            ))
+
+        # Assign material indices to the wedges.
+        for triangle in mesh_data.loop_triangles:
+            for loop_index in triangle.loops:
+                wedges[loop_index].material_index = material_indices[triangle.material_index]
+
+        # Populate the list of wedges with unique wedges & build a look-up table of loop indices to wedge indices
+        wedge_indices = dict()
+        loop_wedge_indices = np.full(len(mesh_data.loops), -1)
+        for loop_index, wedge in enumerate(wedges):
+            wedge_hash = hash(wedge)
+            if wedge_hash in wedge_indices:
+                loop_wedge_indices[loop_index] = wedge_indices[wedge_hash]
+            else:
+                wedge_index = len(psk.wedges)
+                wedge_indices[wedge_hash] = wedge_index
+                psk.wedges.append(wedge)
+                loop_wedge_indices[loop_index] = wedge_index
+
+        # FACES
+        poly_groups, groups = mesh_data.calc_smooth_groups(use_bitflags=True)
+        psk_face_start_index = len(psk.faces)
+        for f in mesh_data.loop_triangles:
+            face = Psk.Face()
+            face.material_index = material_indices[f.material_index]
+            face.wedge_indices[0] = loop_wedge_indices[f.loops[2]]
+            face.wedge_indices[1] = loop_wedge_indices[f.loops[1]]
+            face.wedge_indices[2] = loop_wedge_indices[f.loops[0]]
+            face.smoothing_groups = poly_groups[f.polygon_index]
+            psk.faces.append(face)
+
+        if should_flip_normals:
+            # Invert the normals of the faces.
+            for face in psk.faces[psk_face_start_index:]:
+                face.wedge_indices[0], face.wedge_indices[2] = face.wedge_indices[2], face.wedge_indices[0]
+
+        # WEIGHTS
+        if armature_object is not None:
+            armature_data = typing.cast(Armature, armature_object.data)
+            # Because the vertex groups may contain entries for which there is no matching bone in the armature,
+            # we must filter them out and not export any weights for these vertex groups.
+            bone_names = [x.name for x in bones]
+            vertex_group_names = [x.name for x in mesh_object.vertex_groups]
+            vertex_group_bone_indices = dict()
+            for vertex_group_index, vertex_group_name in enumerate(vertex_group_names):
+                try:
+                    vertex_group_bone_indices[vertex_group_index] = bone_names.index(vertex_group_name)
+                except ValueError:
+                    # The vertex group does not have a matching bone in the list of bones to be exported.
+                    # Check to see if there is an associated bone for this vertex group that exists in the armature.
+                    # If there is, we can traverse the ancestors of that bone to find an alternate bone to use for
+                    # weighting the vertices belonging to this vertex group.
+                    if vertex_group_name in armature_data.bones:
+                        bone = armature_data.bones[vertex_group_name]
+                        while bone is not None:
+                            try:
+                                bone_index = bone_names.index(bone.name)
+                                vertex_group_bone_indices[vertex_group_index] = bone_index
+                                break
+                            except ValueError:
+                                bone = bone.parent
+            for vertex_group_index, vertex_group in enumerate(mesh_object.vertex_groups):
+                if vertex_group_index not in vertex_group_bone_indices:
+                    # Vertex group has no associated bone, skip it.
+                    continue
+                bone_index = vertex_group_bone_indices[vertex_group_index]
+                for vertex_index in range(len(mesh_data.vertices)):
+                    try:
+                        weight = vertex_group.weight(vertex_index)
+                    except RuntimeError:
+                        continue
+                    if weight == 0.0:
+                        continue
+                    w = Psk.Weight()
+                    w.bone_index = bone_index
+                    w.point_index = vertex_offset + vertex_index
+                    w.weight = weight
+                    psk.weights.append(w)
+
+        if not options.use_raw_mesh_data:
+            bpy.data.objects.remove(mesh_object)
+            bpy.data.meshes.remove(mesh_data)
+            del mesh_data
+
+        context.window_manager.progress_update(object_index)
+
+    context.window_manager.progress_end()
+
+    result.psk = psk
+
+    return result
+
+
+- data.py
+  Content:
+from typing import List
+
+from ..data import *
+
+
+class Psk(object):
+    class Wedge(object):
+        def __init__(self, point_index: int, u: float, v: float, material_index: int = 0):
+            self.point_index: int = point_index
+            self.u: float = u
+            self.v: float = v
+            self.material_index = material_index
+
+        def __hash__(self):
+            return hash(f'{self.point_index}-{self.u}-{self.v}-{self.material_index}')
+
+    class Wedge16(Structure):
+        _fields_ = [
+            ('point_index', c_uint32),
+            ('u', c_float),
+            ('v', c_float),
+            ('material_index', c_uint8),
+            ('reserved', c_int8),
+            ('padding2', c_int16)
+        ]
+
+    class Wedge32(Structure):
+        _fields_ = [
+            ('point_index', c_uint32),
+            ('u', c_float),
+            ('v', c_float),
+            ('material_index', c_uint32)
+        ]
+
+    class Face(Structure):
+        _fields_ = [
+            ('wedge_indices', c_uint16 * 3),
+            ('material_index', c_uint8),
+            ('aux_material_index', c_uint8),
+            ('smoothing_groups', c_int32)
+        ]
+
+    class Face32(Structure):
+        _pack_ = 1
+        _fields_ = [
+            ('wedge_indices', c_uint32 * 3),
+            ('material_index', c_uint8),
+            ('aux_material_index', c_uint8),
+            ('smoothing_groups', c_int32)
+        ]
+
+    class Material(Structure):
+        _fields_ = [
+            ('name', c_char * 64),
+            ('texture_index', c_int32),
+            ('poly_flags', c_int32),
+            ('aux_material', c_int32),
+            ('aux_flags', c_int32),
+            ('lod_bias', c_int32),
+            ('lod_style', c_int32)
+        ]
+
+    class Bone(Structure):
+        _fields_ = [
+            ('name', c_char * 64),
+            ('flags', c_int32),
+            ('children_count', c_int32),
+            ('parent_index', c_int32),
+            ('rotation', Quaternion),
+            ('location', Vector3),
+            ('length', c_float),
+            ('size', Vector3)
+        ]
+
+    class Weight(Structure):
+        _fields_ = [
+            ('weight', c_float),
+            ('point_index', c_int32),
+            ('bone_index', c_int32),
+        ]
+
+    class MorphInfo(Structure):
+        _fields_ = [
+            ('name', c_char * 64),
+            ('vertex_count', c_int32)
+        ]
+
+    class MorphData(Structure):
+        _fields_ = [
+            ('position_delta', Vector3),
+            ('tangent_z_delta', Vector3),
+            ('point_index', c_int32)
+        ]
+
+    @property
+    def has_extra_uvs(self):
+        return len(self.extra_uvs) > 0
+
+    @property
+    def has_vertex_colors(self):
+        return len(self.vertex_colors) > 0
+
+    @property
+    def has_vertex_normals(self):
+        return len(self.vertex_normals) > 0
+
+    @property
+    def has_material_references(self):
+        return len(self.material_references) > 0
+
+    @property
+    def has_morph_data(self):
+        return len(self.morph_infos) > 0
+    
+    def __init__(self):
+        self.points: List[Vector3] = []
+        self.wedges: List[Psk.Wedge] = []
+        self.faces: List[Psk.Face] = []
+        self.materials: List[Psk.Material] = []
+        self.weights: List[Psk.Weight] = []
+        self.bones: List[Psk.Bone] = []
+        self.extra_uvs: List[Vector2] = []
+        self.vertex_colors: List[Color] = []
+        self.vertex_normals: List[Vector3] = []
+        self.morph_infos: List[Psk.MorphInfo] = []
+        self.morph_data: List[Psk.MorphData] = []
+        self.material_references: List[str] = []
+
+
+- importer.py
+  Content:
+from typing import Optional, List
+
+import bmesh
+import bpy
+import numpy as np
+from bpy.types import VertexGroup
+from mathutils import Quaternion, Vector, Matrix
+
+from .data import Psk
+from .properties import poly_flags_to_triangle_type_and_bit_flags
+from ..helpers import rgb_to_srgb, is_bdk_addon_loaded
+
+
+class PskImportOptions:
+    def __init__(self):
+        self.name = ''
+        self.should_import_mesh = True
+        self.should_reuse_materials = True
+        self.should_import_vertex_colors = True
+        self.vertex_color_space = 'SRGB'
+        self.should_import_vertex_normals = True
+        self.should_import_extra_uvs = True
+        self.should_import_skeleton = True
+        self.should_import_shape_keys = True
+        self.bone_length = 1.0
+        self.should_import_materials = True
+        self.scale = 1.0
+        self.change_rig_name = False  # New property
+
+
+class ImportBone:
+    '''
+    Intermediate bone type for the purpose of construction.
+    '''
+    def __init__(self, index: int, psk_bone: Psk.Bone):
+        self.index: int = index
+        self.psk_bone: Psk.Bone = psk_bone
+        self.parent: Optional[ImportBone] = None
+        self.local_rotation: Quaternion = Quaternion()
+        self.local_translation: Vector = Vector()
+        self.world_rotation_matrix: Matrix = Matrix()
+        self.world_matrix: Matrix = Matrix()
+        self.vertex_group = None
+        self.original_rotation: Quaternion = Quaternion()
+        self.original_location: Vector = Vector()
+        self.post_rotation: Quaternion = Quaternion()
+
+
+class PskImportResult:
+    def __init__(self):
+        self.warnings: List[str] = []
+
+
+def change_rig_name(context, armature_object):
+    """
+    Change the rig name to "Armature" if the checkbox is checked.
+    """
+    pg = getattr(context.scene, 'psk_import')
+    if pg.change_rig_name:
+        armature_object.name = "Armature"
+
+
+def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
+    result = PskImportResult()
+    armature_object = None
+    mesh_object = None
+
+    if options.should_import_skeleton:
+        # ARMATURE
+        armature_data = bpy.data.armatures.new(options.name)
+        armature_object = bpy.data.objects.new(options.name, armature_data)
+        armature_object.show_in_front = True
+
+        context.scene.collection.objects.link(armature_object)
+
+        try:
+            bpy.ops.object.mode_set(mode='OBJECT')
+        except:
+            pass
+
+        armature_object.select_set(state=True)
+        bpy.context.view_layer.objects.active = armature_object
+
+        bpy.ops.object.mode_set(mode='EDIT')
+
+        import_bones = []
+
+        for bone_index, psk_bone in enumerate(psk.bones):
+            import_bone = ImportBone(bone_index, psk_bone)
+            psk_bone.parent_index = max(0, psk_bone.parent_index)
+            import_bone.local_rotation = Quaternion(tuple(psk_bone.rotation))
+            import_bone.local_translation = Vector(tuple(psk_bone.location))
+            if psk_bone.parent_index == 0 and bone_index == 0:
+                import_bone.world_rotation_matrix = import_bone.local_rotation.to_matrix()
+                import_bone.world_matrix = Matrix.Translation(import_bone.local_translation)
+            import_bones.append(import_bone)
+
+        for bone_index, bone in enumerate(import_bones):
+            if bone.psk_bone.parent_index == 0 and bone_index == 0:
+                continue
+            parent = import_bones[bone.psk_bone.parent_index]
+            bone.parent = parent
+            bone.world_matrix = parent.world_rotation_matrix.to_4x4()
+            translation = bone.local_translation.copy()
+            translation.rotate(parent.world_rotation_matrix)
+            bone.world_matrix.translation = parent.world_matrix.translation + translation
+            bone.world_rotation_matrix = bone.local_rotation.conjugated().to_matrix()
+            bone.world_rotation_matrix.rotate(parent.world_rotation_matrix)
+
+        for import_bone in import_bones:
+            bone_name = import_bone.psk_bone.name.decode('utf-8')
+            edit_bone = armature_data.edit_bones.new(bone_name)
+
+            if import_bone.parent is not None:
+                edit_bone.parent = armature_data.edit_bones[import_bone.psk_bone.parent_index]
+            else:
+                import_bone.local_rotation.conjugate()
+
+            edit_bone.tail = Vector((0.0, options.bone_length, 0.0))
+            edit_bone_matrix = import_bone.local_rotation.conjugated()
+            edit_bone_matrix.rotate(import_bone.world_matrix)
+            edit_bone_matrix = edit_bone_matrix.to_matrix().to_4x4()
+            edit_bone_matrix.translation = import_bone.world_matrix.translation
+            edit_bone.matrix = edit_bone_matrix
+
+    # MESH
+    if options.should_import_mesh:
+        mesh_data = bpy.data.meshes.new(options.name)
+        mesh_object = bpy.data.objects.new(options.name, mesh_data)
+
+        # MATERIALS
+        if options.should_import_materials:
+            for material_index, psk_material in enumerate(psk.materials):
+                material_name = psk_material.name.decode('utf-8')
+                material = None
+                if options.should_reuse_materials and material_name in bpy.data.materials:
+                    # Material already exists, just re-use it.
+                    material = bpy.data.materials[material_name]
+                elif is_bdk_addon_loaded() and psk.has_material_references:
+                    # Material does not yet exist, and we have the BDK addon installed.
+                    # Attempt to load it using BDK addon's operator.
+                    material_reference = psk.material_references[material_index]
+                    if material_reference and bpy.ops.bdk.link_material(reference=material_reference) == {'FINISHED'}:
+                        material = bpy.data.materials[material_name]
+                else:
+                    # Just create a blank material.
+                    material = bpy.data.materials.new(material_name)
+                    mesh_triangle_type, mesh_triangle_bit_flags = poly_flags_to_triangle_type_and_bit_flags(psk_material.poly_flags)
+                    material.psk.mesh_triangle_type = mesh_triangle_type
+                    material.psk.mesh_triangle_bit_flags = mesh_triangle_bit_flags
+                    material.use_nodes = True
+                mesh_data.materials.append(material)
+
+        bm = bmesh.new()
+
+        # VERTICES
+        for point in psk.points:
+            bm.verts.new(tuple(point))
+
+        bm.verts.ensure_lookup_table()
+
+        # FACES
+        invalid_face_indices = set()
+        for face_index, face in enumerate(psk.faces):
+            point_indices = map(lambda i: psk.wedges[i].point_index, reversed(face.wedge_indices))
+            points = [bm.verts[i] for i in point_indices]
+            try:
+                bm_face = bm.faces.new(points)
+                bm_face.material_index = face.material_index
+            except ValueError:
+                # This happens for two reasons:
+                # 1. Two or more of the face's points are the same. (i.e, point indices of [0, 0, 1])
+                # 2. The face is a duplicate of another face. (i.e., point indices of [0, 1, 2] and [0, 1, 2])
+                invalid_face_indices.add(face_index)
+
+        # TODO: Handle invalid faces better.
+        if len(invalid_face_indices) > 0:
+            result.warnings.append(f'Discarded {len(invalid_face_indices)} invalid face(s).')
+
+        bm.to_mesh(mesh_data)
+
+        # TEXTURE COORDINATES
+        uv_layer_data_index = 0
+        uv_layer = mesh_data.uv_layers.new(name='UVMap')
+        for face_index, face in enumerate(psk.faces):
+            if face_index in invalid_face_indices:
+                continue
+            face_wedges = [psk.wedges[i] for i in reversed(face.wedge_indices)]
+            for wedge in face_wedges:
+                uv_layer.data[uv_layer_data_index].uv = wedge.u, 1.0 - wedge.v
+                uv_layer_data_index += 1
+
+        # EXTRA UVS
+        if psk.has_extra_uvs and options.should_import_extra_uvs:
+            extra_uv_channel_count = int(len(psk.extra_uvs) / len(psk.wedges))
+            wedge_index_offset = 0
+            for extra_uv_index in range(extra_uv_channel_count):
+                uv_layer_data_index = 0
+                uv_layer = mesh_data.uv_layers.new(name=f'EXTRAUV{extra_uv_index}')
+                for face_index, face in enumerate(psk.faces):
+                    if face_index in invalid_face_indices:
+                        continue
+                    for wedge_index in reversed(face.wedge_indices):
+                        u, v = psk.extra_uvs[wedge_index_offset + wedge_index]
+                        uv_layer.data[uv_layer_data_index].uv = u, 1.0 - v
+                        uv_layer_data_index += 1
+                wedge_index_offset += len(psk.wedges)
+
+        # VERTEX COLORS
+        if psk.has_vertex_colors and options.should_import_vertex_colors:
+            # Convert vertex colors to sRGB if necessary.
+            psk_vertex_colors = np.zeros((len(psk.vertex_colors), 4))
+            for vertex_color_index in range(len(psk.vertex_colors)):
+                psk_vertex_colors[vertex_color_index,:] = psk.vertex_colors[vertex_color_index].normalized()
+            match options.vertex_color_space:
+                case 'SRGBA':
+                    for i in range(psk_vertex_colors.shape[0]):
+                        psk_vertex_colors[i, :3] = tuple(map(lambda x: rgb_to_srgb(x), psk_vertex_colors[i, :3]))
+                case _:
+                    pass
+
+            # Map the PSK vertex colors to the face corners.
+            face_count = len(psk.faces) - len(invalid_face_indices)
+            face_corner_colors = np.full((face_count * 3, 4), 1.0)
+            face_corner_color_index = 0
+            for face_index, face in enumerate(psk.faces):
+                if face_index in invalid_face_indices:
+                    continue
+                for wedge_index in reversed(face.wedge_indices):
+                    face_corner_colors[face_corner_color_index] = psk_vertex_colors[wedge_index]
+                    face_corner_color_index += 1
+
+            # Create the vertex color attribute.
+            face_corner_color_attribute = mesh_data.attributes.new(name='VERTEXCOLOR', type='FLOAT_COLOR', domain='CORNER')
+            face_corner_color_attribute.data.foreach_set('color', face_corner_colors.flatten())
+
+        # VERTEX NORMALS
+        if psk.has_vertex_normals and options.should_import_vertex_normals:
+            mesh_data.polygons.foreach_set('use_smooth', [True] * len(mesh_data.polygons))
+            normals = []
+            for vertex_normal in psk.vertex_normals:
+                normals.append(tuple(vertex_normal))
+            mesh_data.normals_split_custom_set_from_vertices(normals)
+        else:
+            mesh_data.shade_smooth()
+
+        bm.normal_update()
+        bm.free()
+
+        # WEIGHTS
+        # Get a list of all bones that have weights associated with them.
+        vertex_group_bone_indices = set(map(lambda weight: weight.bone_index, psk.weights))
+        vertex_groups: List[Optional[VertexGroup]] = [None] * len(psk.bones)
+        for bone_index, psk_bone in map(lambda x: (x, psk.bones[x]), vertex_group_bone_indices):
+            vertex_groups[bone_index] = mesh_object.vertex_groups.new(name=psk_bone.name.decode('windows-1252'))
+
+        for weight in psk.weights:
+            vertex_groups[weight.bone_index].add((weight.point_index,), weight.weight, 'ADD')
+
+        # MORPHS (SHAPE KEYS)
+        if options.should_import_shape_keys:
+            morph_data_iterator = iter(psk.morph_data)
+
+            if psk.has_morph_data:
+                mesh_object.shape_key_add(name='MORPH_BASE', from_mix=False)
+
+            for morph_info in psk.morph_infos:
+                shape_key = mesh_object.shape_key_add(name=morph_info.name.decode('windows-1252'), from_mix=False)
+
+                for _ in range(morph_info.vertex_count):
+                    morph_data = next(morph_data_iterator)
+                    x, y, z = morph_data.position_delta
+                    shape_key.data[morph_data.point_index].co += Vector((x, -y, z))
+
+        context.scene.collection.objects.link(mesh_object)
+
+        # Add armature modifier to our mesh object.
+        if options.should_import_skeleton:
+            armature_modifier = mesh_object.modifiers.new(name='Armature', type='ARMATURE')
+            armature_modifier.object = armature_object
+            mesh_object.parent = armature_object
+
+    root_object = armature_object if options.should_import_skeleton else mesh_object
+    root_object.scale = (options.scale, options.scale, options.scale)
+
+    change_rig_name(context, armature_object)  # Call the change_rig_name function
+
+    try:
+        bpy.ops.object.mode_set(mode='OBJECT')
+    except:
+        pass
+
+    return result
+
+- properties.py
+  Content:
+from bpy.props import EnumProperty
+from bpy.types import PropertyGroup
+
+mesh_triangle_types_items = (
+    ('NORMAL', 'Normal', 'Normal one-sided', 0),
+    ('NORMAL_TWO_SIDED', 'Normal Two-Sided', 'Normal but two-sided', 1),
+    ('TRANSLUCENT', 'Translucent', 'Translucent two-sided', 2),
+    ('MASKED', 'Masked', 'Masked two-sided', 3),
+    ('MODULATE', 'Modulate', 'Modulation blended two-sided', 4),
+    ('PLACEHOLDER', 'Placeholder', 'Placeholder triangle for positioning weapon. Invisible', 8),
+)
+
+mesh_triangle_bit_flags_items = (
+    ('UNLIT', 'Unlit', 'Full brightness, no lighting', 16),
+    ('FLAT', 'Flat', 'Flat surface, don\'t do bMeshCurvy thing', 32),
+    ('ENVIRONMENT', 'Environment', 'Environment mapped', 64),
+    ('NO_SMOOTH', 'No Smooth', 'No bilinear filtering on this poly\'s texture', 128),
+)
+
+class PSX_PG_material(PropertyGroup):
+    mesh_triangle_type: EnumProperty(items=mesh_triangle_types_items, name='Triangle Type')
+    mesh_triangle_bit_flags: EnumProperty(items=mesh_triangle_bit_flags_items, name='Triangle Bit Flags',
+                                          options={'ENUM_FLAG'})
+
+mesh_triangle_types_items_dict = {item[0]: item[3] for item in mesh_triangle_types_items}
+mesh_triangle_bit_flags_items_dict = {item[0]: item[3] for item in mesh_triangle_bit_flags_items}
+
+
+def triangle_type_and_bit_flags_to_poly_flags(mesh_triangle_type: str, mesh_triangle_bit_flags: set[str]) -> int:
+    poly_flags = 0
+    poly_flags |= mesh_triangle_types_items_dict.get(mesh_triangle_type, 0)
+    for flag in mesh_triangle_bit_flags:
+        poly_flags |= mesh_triangle_bit_flags_items_dict.get(flag, 0)
+    return poly_flags
+
+
+def poly_flags_to_triangle_type_and_bit_flags(poly_flags: int) -> (str, set[str]):
+    try:
+        triangle_type = next(item[0] for item in mesh_triangle_types_items if item[3] == (poly_flags & 15))
+    except StopIteration:
+        triangle_type = 'NORMAL'
+    triangle_bit_flags = {item[0] for item in mesh_triangle_bit_flags_items if item[3] & poly_flags}
+    return triangle_type, triangle_bit_flags
+
+
+classes = (
+    PSX_PG_material,
+)
+
+
+- reader.py
+  Content:
+import ctypes
+import os
+import re
+import warnings
+from pathlib import Path
+
+from .data import *
+
+
+def _read_types(fp, data_class, section: Section, data):
+    buffer_length = section.data_size * section.data_count
+    buffer = fp.read(buffer_length)
+    offset = 0
+    for _ in range(section.data_count):
+        data.append(data_class.from_buffer_copy(buffer, offset))
+        offset += section.data_size
+
+
+def _read_material_references(path: str) -> List[str]:
+    property_file_path = Path(path).with_suffix('.props.txt')
+    if not property_file_path.is_file():
+        # Property file does not exist.
+        return []
+    # Do a crude regex match to find the Material list entries.
+    contents = property_file_path.read_text()
+    pattern = r'Material\s*=\s*([^\s^,]+)'
+    return re.findall(pattern, contents)
+
+
+def read_psk(path: str) -> Psk:
+
+    psk = Psk()
+
+    # Read the PSK file sections.
+    with open(path, 'rb') as fp:
+        while fp.read(1):
+            fp.seek(-1, 1)
+            section = Section.from_buffer_copy(fp.read(ctypes.sizeof(Section)))
+            if section.name == b'ACTRHEAD':
+                pass
+            elif section.name == b'PNTS0000':
+                _read_types(fp, Vector3, section, psk.points)
+            elif section.name == b'VTXW0000':
+                if section.data_size == ctypes.sizeof(Psk.Wedge16):
+                    _read_types(fp, Psk.Wedge16, section, psk.wedges)
+                elif section.data_size == ctypes.sizeof(Psk.Wedge32):
+                    _read_types(fp, Psk.Wedge32, section, psk.wedges)
+                else:
+                    raise RuntimeError('Unrecognized wedge format')
+            elif section.name == b'FACE0000':
+                _read_types(fp, Psk.Face, section, psk.faces)
+            elif section.name == b'MATT0000':
+                _read_types(fp, Psk.Material, section, psk.materials)
+            elif section.name == b'REFSKELT':
+                _read_types(fp, Psk.Bone, section, psk.bones)
+            elif section.name == b'RAWWEIGHTS':
+                _read_types(fp, Psk.Weight, section, psk.weights)
+            elif section.name == b'FACE3200':
+                _read_types(fp, Psk.Face32, section, psk.faces)
+            elif section.name == b'VERTEXCOLOR':
+                _read_types(fp, Color, section, psk.vertex_colors)
+            elif section.name.startswith(b'EXTRAUVS'):
+                _read_types(fp, Vector2, section, psk.extra_uvs)
+            elif section.name == b'VTXNORMS':
+                _read_types(fp, Vector3, section, psk.vertex_normals)
+            elif section.name == b'MRPHINFO':
+                _read_types(fp, Psk.MorphInfo, section, psk.morph_infos)
+            elif section.name == b'MRPHDATA':
+                _read_types(fp, Psk.MorphData, section, psk.morph_data)
+            else:
+                # Section is not handled, skip it.
+                fp.seek(section.data_size * section.data_count, os.SEEK_CUR)
+                warnings.warn(f'Unrecognized section "{section.name} at position {fp.tell():15}"')
+
+    '''
+    UEViewer exports a sidecar file (*.props.txt) with fully-qualified reference paths for each material
+    (e.g., Texture'Package.Group.Object').
+    '''
+    psk.material_references = _read_material_references(path)
+
+    '''
+    Tools like UEViewer and CUE4Parse write the point index as a 32-bit integer, exploiting the fact that due to struct
+    alignment, there were 16-bits of padding following the original 16-bit point index in the wedge struct.
+    However, this breaks compatibility with PSK files that were created with older tools that treated the
+    point index as a 16-bit integer and might have junk data written to the padding bits.
+    To work around this, we check if each point is still addressable using a 16-bit index, and if it is, assume the
+    point index is a 16-bit integer and truncate the high bits.
+    '''
+    if len(psk.points) <= 65536:
+        for wedge in psk.wedges:
+            wedge.point_index &= 0xFFFF
+
+    return psk
+
+
+- ui.py
+  Content:
+from bpy.types import Panel
+
+
+class PSK_PT_material(Panel):
+    bl_label = 'PSK Material'
+    bl_idname = 'PSK_PT_material'
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = 'material'
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.material is not None
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        material = context.material
+        layout.prop(material.psk, 'mesh_triangle_type')
+        col = layout.column()
+        col.prop(material.psk, 'mesh_triangle_bit_flags', expand=True, text='Flags')
+
+
+classes = (
+    PSK_PT_material,
+)
+
+
+- writer.py
+  Content:
+from ctypes import Structure, sizeof
+from typing import Type
+
+from .data import Psk
+from ..data import Section, Vector3
+
+MAX_WEDGE_COUNT = 65536
+MAX_POINT_COUNT = 4294967296
+MAX_BONE_COUNT = 2147483647
+MAX_MATERIAL_COUNT = 256
+
+
+def _write_section(fp, name: bytes, data_type: Type[Structure] = None, data: list = None):
+    section = Section()
+    section.name = name
+    if data_type is not None and data is not None:
+        section.data_size = sizeof(data_type)
+        section.data_count = len(data)
+    fp.write(section)
+    if data is not None:
+        for datum in data:
+            fp.write(datum)
+
+
+def write_psk(psk: Psk, path: str):
+    if len(psk.wedges) > MAX_WEDGE_COUNT:
+        raise RuntimeError(f'Number of wedges ({len(psk.wedges)}) exceeds limit of {MAX_WEDGE_COUNT}')
+    if len(psk.points) > MAX_POINT_COUNT:
+        raise RuntimeError(f'Numbers of vertices ({len(psk.points)}) exceeds limit of {MAX_POINT_COUNT}')
+    if len(psk.materials) > MAX_MATERIAL_COUNT:
+        raise RuntimeError(f'Number of materials ({len(psk.materials)}) exceeds limit of {MAX_MATERIAL_COUNT}')
+    if len(psk.bones) > MAX_BONE_COUNT:
+        raise RuntimeError(f'Number of bones ({len(psk.bones)}) exceeds limit of {MAX_BONE_COUNT}')
+    elif len(psk.bones) == 0:
+        raise RuntimeError(f'At least one bone must be marked for export')
+
+    with open(path, 'wb') as fp:
+        _write_section(fp, b'ACTRHEAD')
+        _write_section(fp, b'PNTS0000', Vector3, psk.points)
+
+        wedges = []
+        for index, w in enumerate(psk.wedges):
+            wedge = Psk.Wedge16()
+            wedge.material_index = w.material_index
+            wedge.u = w.u
+            wedge.v = w.v
+            wedge.point_index = w.point_index
+            wedges.append(wedge)
+
+        _write_section(fp, b'VTXW0000', Psk.Wedge16, wedges)
+        _write_section(fp, b'FACE0000', Psk.Face, psk.faces)
+        _write_section(fp, b'MATT0000', Psk.Material, psk.materials)
+        _write_section(fp, b'REFSKELT', Psk.Bone, psk.bones)
+        _write_section(fp, b'RAWWEIGHTS', Psk.Weight, psk.weights)
+
+
+Folders:
+- export
+Folder Name: export
+
+Python Scripts:
+- __init__.py
+  Content:
+
+
+- operators.py
+  Content:
+from bpy.props import StringProperty
+from bpy.types import Operator
+from bpy_extras.io_utils import ExportHelper
+
+from ..builder import build_psk, PskBuildOptions, get_psk_input_objects
+from ..writer import write_psk
+from ...helpers import populate_bone_collection_list
+
+
+def is_bone_filter_mode_item_available(context, identifier):
+    input_objects = get_psk_input_objects(context)
+    armature_object = input_objects.armature_object
+    if identifier == 'BONE_COLLECTIONS':
+        if armature_object is None or armature_object.data is None or len(armature_object.data.collections) == 0:
+            return False
+    # else if... you can set up other conditions if you add more options
+    return True
+
+
+def populate_material_list(mesh_objects, material_list):
+    material_list.clear()
+
+    materials = []
+    for mesh_object in mesh_objects:
+        for i, material_slot in enumerate(mesh_object.material_slots):
+            material = material_slot.material
+            # TODO: put this in the poll arg?
+            if material is None:
+                raise RuntimeError('Material slot cannot be empty (index ' + str(i) + ')')
+            if material not in materials:
+                materials.append(material)
+
+    for index, material in enumerate(materials):
+        m = material_list.add()
+        m.material = material
+        m.index = index
+
+
+class PSK_OT_material_list_move_up(Operator):
+    bl_idname = 'psk_export.material_list_item_move_up'
+    bl_label = 'Move Up'
+    bl_options = {'INTERNAL'}
+    bl_description = 'Move the selected material up one slot'
+
+    @classmethod
+    def poll(cls, context):
+        pg = getattr(context.scene, 'psk_export')
+        return pg.material_list_index > 0
+
+    def execute(self, context):
+        pg = getattr(context.scene, 'psk_export')
+        pg.material_list.move(pg.material_list_index, pg.material_list_index - 1)
+        pg.material_list_index -= 1
+        return {'FINISHED'}
+
+
+class PSK_OT_material_list_move_down(Operator):
+    bl_idname = 'psk_export.material_list_item_move_down'
+    bl_label = 'Move Down'
+    bl_options = {'INTERNAL'}
+    bl_description = 'Move the selected material down one slot'
+
+    @classmethod
+    def poll(cls, context):
+        pg = getattr(context.scene, 'psk_export')
+        return pg.material_list_index < len(pg.material_list) - 1
+
+    def execute(self, context):
+        pg = getattr(context.scene, 'psk_export')
+        pg.material_list.move(pg.material_list_index, pg.material_list_index + 1)
+        pg.material_list_index += 1
+        return {'FINISHED'}
+
+
+class PSK_OT_export(Operator, ExportHelper):
+    bl_idname = 'export.psk'
+    bl_label = 'Export'
+    bl_options = {'INTERNAL', 'UNDO'}
+    __doc__ = 'Export mesh and armature to PSK'
+    filename_ext = '.psk'
+    filter_glob: StringProperty(default='*.psk', options={'HIDDEN'})
+
+    filepath: StringProperty(
+        name='File Path',
+        description='File path used for exporting the PSK file',
+        maxlen=1024,
+        default='')
+
+    def invoke(self, context, event):
+        try:
+            input_objects = get_psk_input_objects(context)
+        except RuntimeError as e:
+            self.report({'ERROR_INVALID_CONTEXT'}, str(e))
+            return {'CANCELLED'}
+
+        pg = getattr(context.scene, 'psk_export')
+
+        populate_bone_collection_list(input_objects.armature_object, pg.bone_collection_list)
+
+        try:
+            populate_material_list(input_objects.mesh_objects, pg.material_list)
+        except RuntimeError as e:
+            self.report({'ERROR_INVALID_CONTEXT'}, str(e))
+            return {'CANCELLED'}
+
+        context.window_manager.fileselect_add(self)
+
+        return {'RUNNING_MODAL'}
+
+    @classmethod
+    def poll(cls, context):
+        try:
+            get_psk_input_objects(context)
+        except RuntimeError as e:
+            cls.poll_message_set(str(e))
+            return False
+        return True
+
+    def draw(self, context):
+        layout = self.layout
+        pg = getattr(context.scene, 'psk_export')
+
+        # MESH
+        mesh_header, mesh_panel = layout.panel('01_mesh', default_closed=False)
+        mesh_header.label(text='Mesh', icon='MESH_DATA')
+        if mesh_panel:
+            mesh_panel.prop(pg, 'use_raw_mesh_data')
+
+        # BONES
+        bones_header, bones_panel = layout.panel('02_bones', default_closed=False)
+        bones_header.label(text='Bones', icon='BONE_DATA')
+        if bones_panel:
+            bone_filter_mode_items = pg.bl_rna.properties['bone_filter_mode'].enum_items_static
+            row = bones_panel.row(align=True)
+            for item in bone_filter_mode_items:
+                identifier = item.identifier
+                item_layout = row.row(align=True)
+                item_layout.prop_enum(pg, 'bone_filter_mode', item.identifier)
+                item_layout.enabled = is_bone_filter_mode_item_available(context, identifier)
+
+            if pg.bone_filter_mode == 'BONE_COLLECTIONS':
+                row = bones_panel.row()
+                rows = max(3, min(len(pg.bone_collection_list), 10))
+                row.template_list('PSX_UL_bone_collection_list', '', pg, 'bone_collection_list', pg, 'bone_collection_list_index', rows=rows)
+
+            bones_panel.prop(pg, 'should_enforce_bone_name_restrictions')
+
+        # MATERIALS
+        materials_header, materials_panel = layout.panel('03_materials', default_closed=False)
+        materials_header.label(text='Materials', icon='MATERIAL')
+        if materials_panel:
+            row = materials_panel.row()
+            rows = max(3, min(len(pg.bone_collection_list), 10))
+            row.template_list('PSK_UL_materials', '', pg, 'material_list', pg, 'material_list_index', rows=rows)
+            col = row.column(align=True)
+            col.operator(PSK_OT_material_list_move_up.bl_idname, text='', icon='TRIA_UP')
+            col.operator(PSK_OT_material_list_move_down.bl_idname, text='', icon='TRIA_DOWN')
+
+    def execute(self, context):
+        pg = context.scene.psk_export
+        options = PskBuildOptions()
+        options.bone_filter_mode = pg.bone_filter_mode
+        options.bone_collection_indices = [x.index for x in pg.bone_collection_list if x.is_selected]
+        options.use_raw_mesh_data = pg.use_raw_mesh_data
+        options.materials = [m.material for m in pg.material_list]
+        options.should_enforce_bone_name_restrictions = pg.should_enforce_bone_name_restrictions
+        
+        try:
+            result = build_psk(context, options)
+            for warning in result.warnings:
+                self.report({'WARNING'}, warning)
+            write_psk(result.psk, self.filepath)
+            if len(result.warnings) > 0:
+                self.report({'WARNING'}, f'PSK export successful with {len(result.warnings)} warnings')
+            else:
+                self.report({'INFO'}, f'PSK export successful')
+        except RuntimeError as e:
+            self.report({'ERROR_INVALID_CONTEXT'}, str(e))
+            return {'CANCELLED'}
+    
+        return {'FINISHED'}
+
+
+classes = (
+    PSK_OT_material_list_move_up,
+    PSK_OT_material_list_move_down,
+    PSK_OT_export,
+)
+
+
+- properties.py
+  Content:
+from bpy.props import EnumProperty, CollectionProperty, IntProperty, BoolProperty, PointerProperty
+from bpy.types import PropertyGroup, Material
+
+from ...types import PSX_PG_bone_collection_list_item
+
+empty_set = set()
+
+class PSK_PG_material_list_item(PropertyGroup):
+    material: PointerProperty(type=Material)
+    index: IntProperty()
+
+
+class PSK_PG_export(PropertyGroup):
+    bone_filter_mode: EnumProperty(
+        name='Bone Filter',
+        options=empty_set,
+        description='',
+        items=(
+            ('ALL', 'All', 'All bones will be exported'),
+            ('BONE_COLLECTIONS', 'Bone Collections',
+             'Only bones belonging to the selected bone collections and their ancestors will be exported')
+        )
+    )
+    bone_collection_list: CollectionProperty(type=PSX_PG_bone_collection_list_item)
+    bone_collection_list_index: IntProperty(default=0)
+    use_raw_mesh_data: BoolProperty(default=False, name='Raw Mesh Data', description='No modifiers will be evaluated as part of the exported mesh')
+    material_list: CollectionProperty(type=PSK_PG_material_list_item)
+    material_list_index: IntProperty(default=0)
+    should_enforce_bone_name_restrictions: BoolProperty(
+        default=False,
+        name='Enforce Bone Name Restrictions',
+        description='Enforce that bone names must only contain letters, numbers, spaces, hyphens and underscores.\n\n'
+                    'Depending on the engine, improper bone names might not be referenced correctly by scripts'
+    )
+
+
+classes = (
+    PSK_PG_material_list_item,
+    PSK_PG_export,
+)
+
+
+- ui.py
+  Content:
+from bpy.types import UIList
+
+
+class PSK_UL_materials(UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        row = layout.row()
+        row.prop(item.material, 'name', text='', emboss=False, icon_value=layout.icon(item.material))
+
+
+classes = (
+    PSK_UL_materials,
+)
+
+
+Folders:
+
+- import_
+Folder Name: import_
+
+Python Scripts:
+- __init__.py
+  Content:
+
+
+- operators.py
+  Content:
+import os
+import sys
+
+from bpy.props import StringProperty, BoolProperty, EnumProperty, FloatProperty
+from bpy.types import Operator, PropertyGroup
+from bpy_extras.io_utils import ImportHelper, axis_conversion
+
+from ..importer import PskImportOptions, import_psk
+from ..reader import read_psk
+
+empty_set = set()
+
+
+class PSK_OT_import(Operator, ImportHelper):
+    bl_idname = 'import_scene.psk'
+    bl_label = 'Import'
+    bl_options = {'INTERNAL', 'UNDO', 'PRESET'}
+    __doc__ = 'Load a PSK file'
+    filename_ext = '.psk'
+    filter_glob: StringProperty(default='*.psk;*.pskx', options={'HIDDEN'})
+    filepath: StringProperty(
+        name='File Path',
+        description='File path used for exporting the PSK file',
+        maxlen=1024,
+        default='')
+
+    should_import_vertex_colors: BoolProperty(
+        default=True,
+        options=empty_set,
+        name='Import Vertex Colors',
+        description='Import vertex colors, if available'
+    )
+    vertex_color_space: EnumProperty(
+        name='Vertex Color Space',
+        options=empty_set,
+        description='The source vertex color space',
+        default='SRGBA',
+        items=(
+            ('LINEAR', 'Linear', ''),
+            ('SRGBA', 'sRGBA', ''),
+        )
+    )
+    should_import_vertex_normals: BoolProperty(
+        default=True,
+        name='Import Vertex Normals',
+        options=empty_set,
+        description='Import vertex normals, if available'
+    )
+    should_import_extra_uvs: BoolProperty(
+        default=True,
+        name='Import Extra UVs',
+        options=empty_set,
+        description='Import extra UV maps, if available'
+    )
+    should_import_mesh: BoolProperty(
+        default=True,
+        name='Import Mesh',
+        options=empty_set,
+        description='Import mesh'
+    )
+    should_import_materials: BoolProperty(
+        default=True,
+        name='Import Materials',
+        options=empty_set,
+    )
+    should_import_skeleton: BoolProperty(
+        default=True,
+        name='Import Skeleton',
+        options=empty_set,
+        description='Import skeleton'
+    )
+    bone_length: FloatProperty(
+        default=1.0,
+        min=sys.float_info.epsilon,
+        step=100,
+        soft_min=1.0,
+        name='Bone Length',
+        options=empty_set,
+        subtype='DISTANCE',
+        description='Length of the bones'
+    )
+    should_import_shape_keys: BoolProperty(
+        default=True,
+        name='Import Shape Keys',
+        options=empty_set,
+        description='Import shape keys, if available'
+    )
+    scale: FloatProperty(
+        name='Scale',
+        default=1.0,
+        soft_min=0.0,
+    )
+    change_rig_name: BoolProperty(
+        default=False,
+        name='Change Rig Name to "Armature"',
+        description='Change the rig name to "Armature"'
+    )
+
+    def execute(self, context):
+        psk = read_psk(self.filepath)
+
+        options = PskImportOptions()
+        options.name = os.path.splitext(os.path.basename(self.filepath))[0]
+        options.should_import_mesh = self.should_import_mesh
+        options.should_import_extra_uvs = self.should_import_extra_uvs
+        options.should_import_vertex_colors = self.should_import_vertex_colors
+        options.should_import_vertex_normals = self.should_import_vertex_normals
+        options.vertex_color_space = self.vertex_color_space
+        options.should_import_skeleton = self.should_import_skeleton
+        options.bone_length = self.bone_length
+        options.should_import_materials = self.should_import_materials
+        options.should_import_shape_keys = self.should_import_shape_keys
+        options.scale = self.scale
+        options.change_rig_name = self.change_rig_name  # Use the new property
+
+        if not options.should_import_mesh and not options.should_import_skeleton:
+            self.report({'ERROR'}, 'Nothing to import')
+            return {'CANCELLED'}
+
+        result = import_psk(psk, context, options)
+
+        if len(result.warnings):
+            message = f'PSK imported with {len(result.warnings)} warning(s)\n'
+            message += '\n'.join(result.warnings)
+            self.report({'WARNING'}, message)
+        else:
+            self.report({'INFO'}, f'PSK imported ({options.name})')
+
+        return {'FINISHED'}
+
+    def draw(self, context):
+        layout = self.layout
+
+        row = layout.row()
+
+        col = row.column()
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(self, 'scale')
+
+        mesh_box = layout.box()
+        mesh_box.prop(self, 'should_import_mesh', toggle=True)
+
+        if self.should_import_mesh:
+            row = mesh_box.row()
+            col = row.column()
+            col.use_property_split = True
+            col.use_property_decorate = False
+            col.prop(self, 'should_import_materials', text='Materials')
+            col.prop(self, 'should_import_vertex_normals', text='Vertex Normals')
+            col.prop(self, 'should_import_extra_uvs', text='Extra UVs')
+            col.prop(self, 'should_import_vertex_colors', text='Vertex Colors')
+            if self.should_import_vertex_colors:
+                col.prop(self, 'vertex_color_space')
+            col.prop(self, 'should_import_shape_keys', text='Shape Keys')
+
+        skeleton_box = layout.box()
+        skeleton_box.prop(self, 'should_import_skeleton', toggle=True)
+
+        if self.should_import_skeleton:
+            row = skeleton_box.row()
+            col = row.column()
+            col.use_property_split = True
+            col.use_property_decorate = False
+            col.prop(self, 'bone_length')
+            col.prop(self, 'change_rig_name')  # Add the new checkbox
+
+
+classes = (
+    PSK_OT_import,
+)
+
+Folders:
+
+

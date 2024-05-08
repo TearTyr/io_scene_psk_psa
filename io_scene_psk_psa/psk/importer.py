@@ -25,6 +25,7 @@ class PskImportOptions:
         self.bone_length = 1.0
         self.should_import_materials = True
         self.scale = 1.0
+        self.change_rig_name = True  # New property
 
 
 class ImportBone:
@@ -48,6 +49,14 @@ class ImportBone:
 class PskImportResult:
     def __init__(self):
         self.warnings: List[str] = []
+
+
+def change_rig_name(options: PskImportOptions, armature_object):
+    """
+    Change the rig name to "Armature" if the checkbox is checked.
+    """
+    if options.change_rig_name:
+        armature_object.name = "Armature"
 
 
 def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
@@ -272,6 +281,8 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
 
     root_object = armature_object if options.should_import_skeleton else mesh_object
     root_object.scale = (options.scale, options.scale, options.scale)
+
+    change_rig_name(options, armature_object)  # Pass the options instance
 
     try:
         bpy.ops.object.mode_set(mode='OBJECT')

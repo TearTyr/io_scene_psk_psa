@@ -90,6 +90,11 @@ class PSK_OT_import(Operator, ImportHelper):
         default=1.0,
         soft_min=0.0,
     )
+    change_rig_name: BoolProperty(
+        default=False,
+        name='Change Rig Name to "Armature"',
+        description='Change the rig name to "Armature"'
+    )
 
     def execute(self, context):
         psk = read_psk(self.filepath)
@@ -106,6 +111,7 @@ class PSK_OT_import(Operator, ImportHelper):
         options.should_import_materials = self.should_import_materials
         options.should_import_shape_keys = self.should_import_shape_keys
         options.scale = self.scale
+        options.change_rig_name = self.change_rig_name  # Use the new property
 
         if not options.should_import_mesh and not options.should_import_skeleton:
             self.report({'ERROR'}, 'Nothing to import')
@@ -140,6 +146,7 @@ class PSK_OT_import(Operator, ImportHelper):
             col = row.column()
             col.use_property_split = True
             col.use_property_decorate = False
+            col.prop(self, 'change_rig_name', text='Set Name to Armature')
             col.prop(self, 'should_import_materials', text='Materials')
             col.prop(self, 'should_import_vertex_normals', text='Vertex Normals')
             col.prop(self, 'should_import_extra_uvs', text='Extra UVs')
