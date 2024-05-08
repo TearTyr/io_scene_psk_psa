@@ -68,16 +68,6 @@ class PskBuildResult(object):
         self.warnings: List[str] = []
 
 
-def change_rig_name(context, psk):
-    """
-    Change the rig name to "Armature" if the checkbox is checked.
-    """
-    pg = getattr(context.scene, 'psk_export')
-    if pg.change_rig_name:
-        if psk.armature_object is not None:
-            psk.armature_object.name = "Armature"
-            
-
 def build_psk(context, options: PskBuildOptions) -> PskBuildResult:
     input_objects = get_psk_input_objects(context)
     armature_object: bpy.types.Object = input_objects.armature_object

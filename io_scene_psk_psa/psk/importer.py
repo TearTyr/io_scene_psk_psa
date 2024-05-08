@@ -129,6 +129,7 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
 
         # MATERIALS
         if options.should_import_materials:
+            material_name_to_index = {}
             for material_index, psk_material in enumerate(psk.materials):
                 material_name = psk_material.name.decode('utf-8')
                 material = None
@@ -149,6 +150,7 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
                     material.psk.mesh_triangle_bit_flags = mesh_triangle_bit_flags
                     material.use_nodes = True
                 mesh_data.materials.append(material)
+                material_name_to_index[material_name] = len(mesh_data.materials) - 1
 
         bm = bmesh.new()
 
@@ -165,7 +167,7 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
             points = [bm.verts[i] for i in point_indices]
             try:
                 bm_face = bm.faces.new(points)
-                bm_face.material_index = face.material_index
+                bm_face.material_index = material_name_to_index[psk.materials[face.material_index].name.decode('utf-8')]
             except ValueError:
                 # This happens for two reasons:
                 # 1. Two or more of the face's points are the same. (i.e, point indices of [0, 0, 1])
