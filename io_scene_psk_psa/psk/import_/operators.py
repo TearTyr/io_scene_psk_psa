@@ -91,7 +91,7 @@ class PSK_OT_import(Operator, ImportHelper):
         soft_min=0.0,
     )
     change_rig_name: BoolProperty(
-        default=False,
+        default=True,
         name='Change Rig Name to "Armature"',
         description='Change the rig name to "Armature"'
     )
