@@ -164,6 +164,12 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
             # Load the textures for the material
             import_textures(material, material_references, props_dir)
 
+            # Add normal map to the Principled BSDF node
+            if 'n' in material_references:
+                normal_map_node = material.node_tree.nodes.new("ShaderNodeNormalMap")
+                material.node_tree.links.new(material.node_tree.nodes["Image Texture"].outputs["Color"], normal_map_node.inputs["Color"])
+                material.node_tree.links.new(normal_map_node.outputs["Normal"], material.node_tree.nodes["Principled BSDF"].inputs["Normal"])
+
             # Set the material properties
             material.psk.mesh_triangle_type = poly_flags_to_triangle_type_and_bit_flags(psk_material.poly_flags)[0]
             material.psk.mesh_triangle_bit_flags = poly_flags_to_triangle_type_and_bit_flags(psk_material.poly_flags)[1]
