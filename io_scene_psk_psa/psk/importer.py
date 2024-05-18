@@ -1,7 +1,6 @@
 from typing import Optional, List
 
 import bmesh
-import os
 import bpy
 import numpy as np
 from bpy.types import VertexGroup
@@ -10,13 +9,11 @@ from mathutils import Quaternion, Vector, Matrix
 from .data import Psk
 from .properties import poly_flags_to_triangle_type_and_bit_flags
 from ..helpers import rgb_to_srgb, is_bdk_addon_loaded
-from .reader import read_psk, _read_material_references
 
 
 class PskImportOptions:
     def __init__(self):
         self.name = ''
-        self.change_rig_name = True  # New property
         self.should_import_mesh = True
         self.should_reuse_materials = True
         self.should_import_vertex_colors = True
@@ -51,38 +48,6 @@ class ImportBone:
 class PskImportResult:
     def __init__(self):
         self.warnings: List[str] = []
-
-
-def change_rig_name(options: PskImportOptions, armature_object):
-    """
-    Change the rig name to "Armature" if the checkbox is checked.
-    """
-    if options.change_rig_name:
-        armature_object.name = "Armature"
-
-
-def import_textures(material, texture_paths, props_dir):
-    node_tree = material.node_tree
-    principled_bsdf = next((node for node in node_tree.nodes if node.type == 'BSDF_PRINCIPLED'), None)
-
-    if not principled_bsdf:
-        principled_bsdf = node_tree.nodes.new("ShaderNodeBsdfPrincipled")
-
-    for texture_type, texture_path in texture_paths.items():
-        image_texture_node = node_tree.nodes.new("ShaderNodeTexImage")
-        image = bpy.data.images.load(texture_path)
-        image_texture_node.image = image
-
-        if texture_type == 'd':
-            node_tree.links.new(image_texture_node.outputs["Color"], principled_bsdf.inputs["Base Color"])
-        elif texture_type == 'n':
-            normal_map_node = node_tree.nodes.new("ShaderNodeNormalMap")
-            node_tree.links.new(image_texture_node.outputs["Color"], normal_map_node.inputs["Color"])
-            node_tree.links.new(normal_map_node.outputs["Normal"], principled_bsdf.inputs["Normal"])
-        elif texture_type == 'r':
-            node_tree.links.new(image_texture_node.outputs["Color"], principled_bsdf.inputs["Roughness"])
-        elif texture_type == 'a':
-            node_tree.links.new(image_texture_node.outputs["Alpha"], principled_bsdf.inputs["Alpha"])
 
 
 def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
@@ -153,28 +118,28 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
         mesh_data = bpy.data.meshes.new(options.name)
         mesh_object = bpy.data.objects.new(options.name, mesh_data)
 
-    if options.should_import_materials:
         # MATERIALS
-        material_references, props_dir = _read_material_references(context.blend_data.filepath)
-        for material_index, psk_material in enumerate(psk.materials):
-            material_name = psk_material.name.decode('utf-8')
-            material = bpy.data.materials.new(material_name)
-            material.use_nodes = True
-
-            # Load the textures for the material
-            import_textures(material, material_references, props_dir)
-
-            # Add normal map to the Principled BSDF node
-            if 'n' in material_references:
-                normal_map_node = material.node_tree.nodes.new("ShaderNodeNormalMap")
-                material.node_tree.links.new(material.node_tree.nodes["Image Texture"].outputs["Color"], normal_map_node.inputs["Color"])
-                material.node_tree.links.new(normal_map_node.outputs["Normal"], material.node_tree.nodes["Principled BSDF"].inputs["Normal"])
-
-            # Set the material properties
-            material.psk.mesh_triangle_type = poly_flags_to_triangle_type_and_bit_flags(psk_material.poly_flags)[0]
-            material.psk.mesh_triangle_bit_flags = poly_flags_to_triangle_type_and_bit_flags(psk_material.poly_flags)[1]
-
-            mesh_data.materials.append(material)
+        if options.should_import_materials:
+            for material_index, psk_material in enumerate(psk.materials):
+                material_name = psk_material.name.decode('utf-8')
+                material = None
+                if options.should_reuse_materials and material_name in bpy.data.materials:
+                    # Material already exists, just re-use it.
+                    material = bpy.data.materials[material_name]
+                elif is_bdk_addon_loaded() and psk.has_material_references:
+                    # Material does not yet exist, and we have the BDK addon installed.
+                    # Attempt to load it using BDK addon's operator.
+                    material_reference = psk.material_references[material_index]
+                    if material_reference and bpy.ops.bdk.link_material(reference=material_reference) == {'FINISHED'}:
+                        material = bpy.data.materials[material_name]
+                else:
+                    # Just create a blank material.
+                    material = bpy.data.materials.new(material_name)
+                    mesh_triangle_type, mesh_triangle_bit_flags = poly_flags_to_triangle_type_and_bit_flags(psk_material.poly_flags)
+                    material.psk.mesh_triangle_type = mesh_triangle_type
+                    material.psk.mesh_triangle_bit_flags = mesh_triangle_bit_flags
+                    material.use_nodes = True
+                mesh_data.materials.append(material)
 
         bm = bmesh.new()
 
@@ -191,7 +156,7 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
             points = [bm.verts[i] for i in point_indices]
             try:
                 bm_face = bm.faces.new(points)
-                bm_face.material_index = material_index
+                bm_face.material_index = face.material_index
             except ValueError:
                 # This happens for two reasons:
                 # 1. Two or more of the face's points are the same. (i.e, point indices of [0, 0, 1])
@@ -307,8 +272,6 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
 
     root_object = armature_object if options.should_import_skeleton else mesh_object
     root_object.scale = (options.scale, options.scale, options.scale)
-
-    change_rig_name(options, armature_object)
 
     try:
         bpy.ops.object.mode_set(mode='OBJECT')
