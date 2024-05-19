@@ -80,12 +80,11 @@ def _get_armature_bone_index_for_psa_bone(psa_bone_name: str, armature_bone_name
     return None
 
 def _get_sample_frame_times(source_frame_count: int, frame_step: float) -> typing.Iterable[float]:
-    # TODO: for correctness, we should also emit the target frame time as well (because the last frame can be a
-    #  fractional frame).
     time = 0.0
-    while time < source_frame_count - 1:
+    while time < source_frame_count:
         yield time
         time += frame_step
+    # Ensure the last frame time is included, even if it's a fractional frame
     yield source_frame_count - 1
 
 def _resample_sequence_data_matrix(sequence_data_matrix: np.ndarray, frame_step: float = 1.0) -> np.ndarray:
@@ -123,7 +122,6 @@ def _resample_sequence_data_matrix(sequence_data_matrix: np.ndarray, frame_step:
                 resampled_sequence_data_matrix[sample_frame_index, bone_index, :] = q.w, q.x, q.y, q.z, l.x, l.y, l.z
 
     return resampled_sequence_data_matrix
-
 
 def import_psa(context: Context, psa_reader: PsaReader, armature_object: Object, options: PsaImportOptions) -> PsaImportResult:
     result = PsaImportResult()
