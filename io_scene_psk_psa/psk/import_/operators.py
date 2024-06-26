@@ -2,13 +2,24 @@ import os
 import sys
 
 from bpy.props import StringProperty, BoolProperty, EnumProperty, FloatProperty
-from bpy.types import Operator, PropertyGroup
-from bpy_extras.io_utils import ImportHelper, axis_conversion
+from bpy.types import Operator, FileHandler, Context
+from bpy_extras.io_utils import ImportHelper
 
 from ..importer import PskImportOptions, import_psk
 from ..reader import read_psk
 
 empty_set = set()
+
+
+class PSK_FH_import(FileHandler):
+    bl_idname = 'PSK_FH_import'
+    bl_label = 'File handler for Unreal PSK/PSKX import'
+    bl_import_operator = 'import_scene.psk'
+    bl_file_extensions = '.psk;.pskx'
+
+    @classmethod
+    def poll_drop(cls, context: Context):
+        return context.area and context.area.type == 'VIEW_3D'
 
 
 class PSK_OT_import(Operator, ImportHelper):
@@ -90,10 +101,11 @@ class PSK_OT_import(Operator, ImportHelper):
         default=1.0,
         soft_min=0.0,
     )
-    change_rig_name: BoolProperty(
-        default=True,
-        name='Change Rig Name to "Armature"',
-        description='Change the rig name to "Armature"'
+    bdk_repository_id: StringProperty(
+        name='BDK Repository ID',
+        default='',
+        options=empty_set,
+        description='The ID of the BDK repository to use for loading materials'
     )
 
     def execute(self, context):
@@ -111,7 +123,9 @@ class PSK_OT_import(Operator, ImportHelper):
         options.should_import_materials = self.should_import_materials
         options.should_import_shape_keys = self.should_import_shape_keys
         options.scale = self.scale
-        options.change_rig_name = self.change_rig_name  # Use the new property
+
+        if self.bdk_repository_id:
+            options.bdk_repository_id = self.bdk_repository_id
 
         if not options.should_import_mesh and not options.should_import_skeleton:
             self.report({'ERROR'}, 'Nothing to import')
@@ -138,15 +152,14 @@ class PSK_OT_import(Operator, ImportHelper):
         col.use_property_decorate = False
         col.prop(self, 'scale')
 
-        mesh_box = layout.box()
-        mesh_box.prop(self, 'should_import_mesh', toggle=True)
+        mesh_header, mesh_panel = layout.panel('mesh_panel_id', default_closed=False)
+        mesh_header.prop(self, 'should_import_mesh')
 
-        if self.should_import_mesh:
-            row = mesh_box.row()
+        if mesh_panel and self.should_import_mesh:
+            row = mesh_panel.row()
             col = row.column()
             col.use_property_split = True
             col.use_property_decorate = False
-            col.prop(self, 'change_rig_name', text='Set Name to Armature')
             col.prop(self, 'should_import_materials', text='Materials')
             col.prop(self, 'should_import_vertex_normals', text='Vertex Normals')
             col.prop(self, 'should_import_extra_uvs', text='Extra UVs')
@@ -155,11 +168,11 @@ class PSK_OT_import(Operator, ImportHelper):
                 col.prop(self, 'vertex_color_space')
             col.prop(self, 'should_import_shape_keys', text='Shape Keys')
 
-        skeleton_box = layout.box()
-        skeleton_box.prop(self, 'should_import_skeleton', toggle=True)
+        skeleton_header, skeleton_panel = layout.panel('skeleton_panel_id', default_closed=False)
+        skeleton_header.prop(self, 'should_import_skeleton')
 
-        if self.should_import_skeleton:
-            row = skeleton_box.row()
+        if skeleton_panel and self.should_import_skeleton:
+            row = skeleton_panel.row()
             col = row.column()
             col.use_property_split = True
             col.use_property_decorate = False
@@ -168,4 +181,5 @@ class PSK_OT_import(Operator, ImportHelper):
 
 classes = (
     PSK_OT_import,
+    PSK_FH_import,
 )

@@ -8,7 +8,7 @@ from mathutils import Quaternion, Vector, Matrix
 
 from .data import Psk
 from .properties import poly_flags_to_triangle_type_and_bit_flags
-from ..helpers import rgb_to_srgb, is_bdk_addon_loaded
+from ..shared.helpers import rgb_to_srgb, is_bdk_addon_loaded
 
 
 class PskImportOptions:
@@ -25,6 +25,7 @@ class PskImportOptions:
         self.bone_length = 1.0
         self.should_import_materials = True
         self.scale = 1.0
+        self.bdk_repository_id = None
 
 
 class ImportBone:
@@ -130,7 +131,7 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
                     # Material does not yet exist, and we have the BDK addon installed.
                     # Attempt to load it using BDK addon's operator.
                     material_reference = psk.material_references[material_index]
-                    if material_reference and bpy.ops.bdk.link_material(reference=material_reference) == {'FINISHED'}:
+                    if material_reference and bpy.ops.bdk.link_material(reference=material_reference, repository_id=options.bdk_repository_id) == {'FINISHED'}:
                         material = bpy.data.materials[material_name]
                 else:
                     # Just create a blank material.

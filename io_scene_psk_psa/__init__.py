@@ -1,23 +1,11 @@
 from bpy.app.handlers import persistent
 
-bl_info = {
-    'name': 'PSK/PSA Importer/Exporter',
-    'author': 'Colin Basnett, Yurii Ti',
-    'version': (7, 0, 0),
-    'blender': (4, 0, 0),
-    'description': 'PSK/PSA Import/Export (.psk/.psa)',
-    'warning': '',
-    'doc_url': 'https://github.com/DarklightGames/io_scene_psk_psa',
-    'tracker_url': 'https://github.com/DarklightGames/io_scene_psk_psa/issues',
-    'category': 'Import-Export'
-}
-
 if 'bpy' in locals():
     import importlib
 
-    importlib.reload(psx_data)
-    importlib.reload(psx_helpers)
-    importlib.reload(psx_types)
+    importlib.reload(shared_data)
+    importlib.reload(shared_helpers)
+    importlib.reload(shared_types)
 
     importlib.reload(psk_data)
     importlib.reload(psk_reader)
@@ -43,52 +31,31 @@ if 'bpy' in locals():
     importlib.reload(psa_import_properties)
     importlib.reload(psa_import_operators)
     importlib.reload(psa_import_ui)
-
-    importlib.reload(combine_psk_and_gltf)
-    importlib.reload(export_as_fbx)
-
-    importlib.reload(psk_psa_import_export)
-
 else:
-    # if i remove this line, it can be enabled just fine
-    from . import data as psx_data
-    from . import helpers as psx_helpers
-    from . import types as psx_types
-    from .psk import data as psk_data
-    from .psk import reader as psk_reader
-    from .psk import writer as psk_writer
-    from .psk import builder as psk_builder
-    from .psk import importer as psk_importer
-    from .psk import properties as psk_properties
-    from .psk import ui as psk_ui
-    from .psk.export import properties as psk_export_properties
-    from .psk.export import operators as psk_export_operators
-    from .psk.export import ui as psk_export_ui
+    from .shared import data as shared_data, types as shared_types, helpers as shared_helpers
+    from .psk import data as psk_data, builder as psk_builder, writer as psk_writer, \
+    importer as psk_importer, properties as psk_properties
+    from .psk import reader as psk_reader, ui as psk_ui
+    from .psk.export import properties as psk_export_properties, ui as psk_export_ui, \
+        operators as psk_export_operators
     from .psk.import_ import operators as psk_import_operators
 
-    from .psa import data as psa_data
-    from .psa import config as psa_config
-    from .psa import reader as psa_reader
-    from .psa import writer as psa_writer
-    from .psa import builder as psa_builder
-    from .psa import importer as psa_importer
-    from .psa.export import properties as psa_export_properties
-    from .psa.export import operators as psa_export_operators
-    from .psa.export import ui as psa_export_ui
-    from .psa.import_ import properties as psa_import_properties
+    from .psa import config as psa_config, data as psa_data, writer as psa_writer, reader as psa_reader, \
+        builder as psa_builder, importer as psa_importer
+    from .psa.export import properties as psa_export_properties, ui as psa_export_ui, \
+        operators as psa_export_operators
     from .psa.import_ import operators as psa_import_operators
-    from .psa.import_ import ui as psa_import_ui
-
-    from .tool import combine_psk_and_gltf
-    from .tool import export_as_fbx
-
-    from . import psk_psa_import_export
-
+    from .psa.import_ import ui as psa_import_ui, properties as psa_import_properties
 
 import bpy
 from bpy.props import PointerProperty
 
-classes = psx_types.classes +\
+# TODO: just here so that it's not unreferenced and removed on save.
+if [shared_data, shared_helpers, psk_data, psk_reader, psk_writer, psk_builder, psk_importer, psa_data, psa_config,
+    psa_reader, psa_writer, psa_builder, psa_importer]:
+    pass
+
+classes = shared_types.classes +\
           psk_properties.classes +\
           psk_ui.classes +\
           psk_import_operators.classes +\
@@ -120,15 +87,8 @@ def psa_import_menu_func(self, context):
 
 
 def register():
-    try:
-        for cls in classes:
-            bpy.utils.register_class(cls)
-    except ValueError as e:
-        if str(e) == f"bpy_struct \"{'PSX_PG_action_export'}\" is already registered":
-            # This class is already registered, skip it
-            pass
-        else:
-            raise e
+    for cls in classes:
+        bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_export.append(psk_export_menu_func)
     bpy.types.TOPBAR_MT_file_import.append(psk_import_menu_func)
     bpy.types.TOPBAR_MT_file_export.append(psa_export_menu_func)
@@ -137,40 +97,21 @@ def register():
     bpy.types.Scene.psa_import = PointerProperty(type=psa_import_properties.PSA_PG_import)
     bpy.types.Scene.psa_export = PointerProperty(type=psa_export_properties.PSA_PG_export)
     bpy.types.Scene.psk_export = PointerProperty(type=psk_export_properties.PSK_PG_export)
-    bpy.types.Action.psa_export = PointerProperty(type=psx_types.PSX_PG_action_export)
-    psk_psa_import_export.register()
-    combine_psk_and_gltf.register()
-    export_as_fbx.register()
+    bpy.types.Action.psa_export = PointerProperty(type=shared_types.PSX_PG_action_export)
 
 
 def unregister():
-    if hasattr(bpy.types.Scene, 'psk_export'):
-        del bpy.types.Scene.psk_export
-    if hasattr(bpy.types.Scene, 'psa_import'):
-        del bpy.types.Scene.psa_import
-    if hasattr(bpy.types.Scene, 'psa_export'):
-        del bpy.types.Scene.psa_export
-    if hasattr(bpy.types.Action, 'psa_export'):
-        del bpy.types.Action.psa_export
-
+    del bpy.types.Material.psk
+    del bpy.types.Scene.psa_import
+    del bpy.types.Scene.psa_export
+    del bpy.types.Scene.psk_export
+    del bpy.types.Action.psa_export
     bpy.types.TOPBAR_MT_file_export.remove(psk_export_menu_func)
     bpy.types.TOPBAR_MT_file_import.remove(psk_import_menu_func)
     bpy.types.TOPBAR_MT_file_export.remove(psa_export_menu_func)
     bpy.types.TOPBAR_MT_file_import.remove(psa_import_menu_func)
-
-    psk_psa_import_export.unregister()
-    combine_psk_and_gltf.unregister()
-    export_as_fbx.unregister()
-
     for cls in reversed(classes):
-        try:
-            bpy.utils.unregister_class(cls)
-        except RuntimeError as e:
-            if str(e) == f"bpy_struct \"{'PSX_PG_action_export'}\" not registered":
-                # This class is not registered, skip it
-                pass
-            else:
-                raise e
+        bpy.utils.unregister_class(cls)
 
 
 if __name__ == '__main__':

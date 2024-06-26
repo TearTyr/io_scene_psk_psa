@@ -2,7 +2,6 @@ import re
 import typing
 from typing import List, Iterable
 
-import addon_utils
 import bpy.types
 from bpy.types import NlaStrip, Object, AnimData
 
@@ -32,12 +31,12 @@ def get_nla_strips_in_frame_range(animation_data: AnimData, frame_min: float, fr
 
 
 def populate_bone_collection_list(armature_object: Object, bone_collection_list: bpy.props.CollectionProperty) -> None:
-    '''
+    """
     Updates the bone collections collection.
 
     Bone collection selections are preserved between updates unless none of the groups were previously selected;
     otherwise, all collections are selected by default.
-    '''
+    """
     has_selected_collections = any([g.is_selected for g in bone_collection_list])
     unassigned_collection_is_selected, selected_assigned_collection_names = True, []
 
@@ -86,7 +85,7 @@ def check_bone_names(bone_names: Iterable[str]):
 
 
 def get_export_bone_names(armature_object: Object, bone_filter_mode: str, bone_collection_indices: List[int]) -> List[str]:
-    '''
+    """
     Returns a sorted list of bone indices that should be exported for the given bone filter mode and bone collections.
 
     Note that the ancestors of bones within the bone collections will also be present in the returned list.
@@ -95,7 +94,7 @@ def get_export_bone_names(armature_object: Object, bone_filter_mode: str, bone_c
     :param bone_filter_mode: One of ['ALL', 'BONE_COLLECTIONS']
     :param bone_collection_indices: List of bone collection indices to be exported.
     :return: A sorted list of bone indices that should be exported.
-    '''
+    """
     if armature_object is None or armature_object.type != 'ARMATURE':
         raise ValueError('An armature object must be supplied')
 
@@ -167,4 +166,6 @@ def get_export_bone_names(armature_object: Object, bone_filter_mode: str, bone_c
 
 
 def is_bdk_addon_loaded():
-    return addon_utils.check('bdk_addon')[1]
+    # TODO: this does not work anymore for *reasons*. Just check if bpy.ops.bdk.link_material exists.
+    # return addon_utils.check('bdk_addon')[1]
+    return bpy.ops.bdk.link_material is not None
