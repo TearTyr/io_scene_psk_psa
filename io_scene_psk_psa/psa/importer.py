@@ -80,11 +80,12 @@ def _get_armature_bone_index_for_psa_bone(psa_bone_name: str, armature_bone_name
     return None
 
 def _get_sample_frame_times(source_frame_count: int, frame_step: float) -> typing.Iterable[float]:
+    # TODO: for correctness, we should also emit the target frame time as well (because the last frame can be a
+    #  fractional frame).
     time = 0.0
-    while time < source_frame_count:
+    while time < source_frame_count - 1:
         yield time
         time += frame_step
-    # Ensure the last frame time is included, even if it's a fractional frame
     yield source_frame_count - 1
 
 def _resample_sequence_data_matrix(sequence_data_matrix: np.ndarray, frame_step: float = 1.0) -> np.ndarray:
@@ -122,6 +123,34 @@ def _resample_sequence_data_matrix(sequence_data_matrix: np.ndarray, frame_step:
                 resampled_sequence_data_matrix[sample_frame_index, bone_index, :] = q.w, q.x, q.y, q.z, l.x, l.y, l.z
 
     return resampled_sequence_data_matrix
+
+def _key_difference(key1, key2):
+    """
+    Calculate the difference between two keys (rotation and location).
+    """
+    rot_diff = Quaternion(key1[:4]).rotation_difference(Quaternion(key2[:4])).angle
+    loc_diff = Vector(key1[4:]) - Vector(key2[4:])
+    return max(rot_diff, loc_diff.length)
+
+
+def _resample_and_reduce_keyframes(sequence_data_matrix: np.ndarray, frame_step: float = 1.0, threshold: float = 0.01) -> np.ndarray:
+    """
+    Resamples the sequence data matrix and reduces keyframes based on a threshold.
+    """
+    resampled_data = _resample_sequence_data_matrix(sequence_data_matrix, frame_step)
+    reduced_data = []
+    
+    for bone_index in range(resampled_data.shape[1]):
+        bone_data = []
+        prev_key = None
+        for frame_index, key in enumerate(resampled_data[:, bone_index, :]):
+            if prev_key is None or _key_difference(prev_key, key) > threshold:
+                bone_data.append((frame_index, key))
+                prev_key = key
+        reduced_data.append(bone_data)
+    
+    return reduced_data
+
 
 def import_psa(context: Context, psa_reader: PsaReader, armature_object: Object, options: PsaImportOptions) -> PsaImportResult:
     result = PsaImportResult()
@@ -266,46 +295,38 @@ def import_psa(context: Context, psa_reader: PsaReader, armature_object: Object,
                     action.fcurves.new(location_data_path, index=2, action_group=pose_bone.name) if add_location_fcurves else None,  # Lz
                 ]
 
-            # Read the sequence data matrix from the PSA.
+            # Read and process the sequence data
             sequence_data_matrix = psa_reader.read_sequence_data_matrix(sequence_name)
-
-            # Convert the sequence's data from world-space to local-space.
+            
+            # Convert from world-space to local-space
             for bone_index, import_bone in enumerate(import_bones):
                 if import_bone is None:
                     continue
                 for frame_index in range(sequence.frame_count):
-                    # This bone has writeable keyframes for this frame.
                     key_data = sequence_data_matrix[frame_index, bone_index]
-                    # Calculate the local-space key data for the bone.
                     sequence_data_matrix[frame_index, bone_index] = _calculate_fcurve_data(import_bone, key_data)
 
-            # Resample the sequence data to the target FPS.
-            # If the target frame count is the same as the source frame count, this will be a no-op.
-            resampled_sequence_data_matrix = _resample_sequence_data_matrix(sequence_data_matrix,
-                                                                            frame_step=sequence.fps / target_fps)
+            # Resample and reduce keyframes
+            reduced_sequence_data = _resample_and_reduce_keyframes(sequence_data_matrix, 
+                                                                   frame_step=sequence.fps / target_fps,
+                                                                   threshold=options.keyframe_reduction_threshold)
 
-            # Write the keyframes out.
-            # Note that the f-curve data consists of alternating time and value data.
-            target_frame_count = resampled_sequence_data_matrix.shape[0]
-            fcurve_data = np.zeros(2 * target_frame_count, dtype=float)
-            fcurve_data[0::2] = range(0, target_frame_count)
-
+            # Write the keyframes
             for bone_index, import_bone in enumerate(import_bones):
                 if import_bone is None:
                     continue
                 for fcurve_index, fcurve in enumerate(import_bone.fcurves):
                     if fcurve is None:
                         continue
-                    fcurve_data[1::2] = resampled_sequence_data_matrix[:, bone_index, fcurve_index]
-                    fcurve.keyframe_points.add(target_frame_count)
-                    fcurve.keyframe_points.foreach_set('co', fcurve_data)
-                    for fcurve_keyframe in fcurve.keyframe_points:
-                        fcurve_keyframe.interpolation = 'LINEAR'
+                    for frame, key in reduced_sequence_data[bone_index]:
+                        fcurve.keyframe_points.insert(frame, key[fcurve_index])
+                    fcurve.update()
 
-            if options.should_convert_to_samples:
-                # Bake the curve to samples.
-                for fcurve in action.fcurves:
-                    fcurve.convert_to_samples(start=0, end=sequence.frame_count)
+            # Apply interpolation
+            for fcurve in action.fcurves:
+                for keyframe in fcurve.keyframe_points:
+                    keyframe.interpolation = 'BEZIER'  # or 'LINEAR' if you prefer
+                fcurve.update()
 
         # Write meta-data.
         if options.should_write_metadata:
