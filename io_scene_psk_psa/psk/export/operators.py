@@ -19,22 +19,25 @@ def is_bone_filter_mode_item_available(context, identifier):
 
 def populate_material_list(mesh_objects, material_list):
     material_list.clear()
-
     materials = []
+
+    def is_valid_material(material, slot_index, object_name):
+        if material is None:
+            raise RuntimeError(f'Material slot cannot be empty (index {slot_index} in object {object_name})')
+        return True
+
     for mesh_object in mesh_objects:
         for i, material_slot in enumerate(mesh_object.material_slots):
             material = material_slot.material
-            # TODO: put this in the poll arg?
-            if material is None:
-                raise RuntimeError('Material slot cannot be empty (index ' + str(i) + ')')
-            if material not in materials:
+            if is_valid_material(material, i, mesh_object.name) and material not in materials:
                 materials.append(material)
 
     for index, material in enumerate(materials):
-        m = material_list.add()
-        m.material = material
-        m.index = index
+        item = material_list.add()
+        item.material = material
+        item.index = index
 
+    return len(materials) > 0
 
 class PSK_OT_material_list_move_up(Operator):
     bl_idname = 'psk_export.material_list_item_move_up'

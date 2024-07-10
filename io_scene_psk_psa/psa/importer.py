@@ -80,13 +80,14 @@ def _get_armature_bone_index_for_psa_bone(psa_bone_name: str, armature_bone_name
     return None
 
 def _get_sample_frame_times(source_frame_count: int, frame_step: float) -> typing.Iterable[float]:
-    # TODO: for correctness, we should also emit the target frame time as well (because the last frame can be a
-    #  fractional frame).
     time = 0.0
-    while time < source_frame_count - 1:
+    while time < source_frame_count:
         yield time
         time += frame_step
-    yield source_frame_count - 1
+    
+    # Emit the last frame time if it hasn't been emitted yet
+    if time > source_frame_count:
+        yield source_frame_count - 1
 
 def _resample_sequence_data_matrix(sequence_data_matrix: np.ndarray, frame_step: float = 1.0) -> np.ndarray:
     """

@@ -152,30 +152,44 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
 
         # FACES
         invalid_face_indices = set()
+        duplicate_faces = set()
         for face_index, face in enumerate(psk.faces):
-            point_indices = map(lambda i: psk.wedges[i].point_index, reversed(face.wedge_indices))
+            point_indices = list(map(lambda i: psk.wedges[i].point_index, reversed(face.wedge_indices)))
+            
+            # Check for duplicate vertices in the face
+            if len(set(point_indices)) != len(point_indices):
+                invalid_face_indices.add(face_index)
+                result.warnings.append(f'Face {face_index} has duplicate vertices and will be discarded.')
+                continue
+            
             points = [bm.verts[i] for i in point_indices]
+            
+            # Check for duplicate faces
+            edge_key = tuple(sorted(point_indices))
+            if edge_key in duplicate_faces:
+                invalid_face_indices.add(face_index)
+                result.warnings.append(f'Face {face_index} is a duplicate and will be discarded.')
+                continue
+            
+            duplicate_faces.add(edge_key)
+            
             try:
                 bm_face = bm.faces.new(points)
                 bm_face.material_index = face.material_index
-            except ValueError:
-                # This happens for two reasons:
-                # 1. Two or more of the face's points are the same. (i.e, point indices of [0, 0, 1])
-                # 2. The face is a duplicate of another face. (i.e., point indices of [0, 1, 2] and [0, 1, 2])
+            except ValueError as e:
                 invalid_face_indices.add(face_index)
-
-        # TODO: Handle invalid faces better.
-        if len(invalid_face_indices) > 0:
-            result.warnings.append(f'Discarded {len(invalid_face_indices)} invalid face(s).')
+                result.warnings.append(f'Face {face_index} is invalid and will be discarded. Error: {str(e)}')
 
         bm.to_mesh(mesh_data)
+
+        # Update face indices for UV mapping and other operations
+        valid_face_indices = [i for i in range(len(psk.faces)) if i not in invalid_face_indices]
 
         # TEXTURE COORDINATES
         uv_layer_data_index = 0
         uv_layer = mesh_data.uv_layers.new(name='UVMap')
-        for face_index, face in enumerate(psk.faces):
-            if face_index in invalid_face_indices:
-                continue
+        for face_index in valid_face_indices:
+            face = psk.faces[face_index]
             face_wedges = [psk.wedges[i] for i in reversed(face.wedge_indices)]
             for wedge in face_wedges:
                 uv_layer.data[uv_layer_data_index].uv = wedge.u, 1.0 - wedge.v
