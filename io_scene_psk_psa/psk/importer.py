@@ -26,6 +26,8 @@ class PskImportOptions:
         self.should_import_materials = True
         self.scale = 1.0
         self.bdk_repository_id = None
+        self.auto_scale = True # test
+        self.target_bone_length = 0.1  #test 
 
 
 class ImportBone:
@@ -49,6 +51,17 @@ class ImportBone:
 class PskImportResult:
     def __init__(self):
         self.warnings: List[str] = []
+
+
+def calculate_average_bone_length(import_bones):
+    total_length = 0
+    count = 0
+    for bone in import_bones:
+        if bone.parent:
+            length = (bone.world_matrix.translation - bone.parent.world_matrix.translation).length
+            total_length += length
+            count += 1
+    return total_length / count if count > 0 else 1.0
 
 
 def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
@@ -98,8 +111,13 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
             bone.world_rotation_matrix = bone.local_rotation.conjugated().to_matrix()
             bone.world_rotation_matrix.rotate(parent.world_rotation_matrix)
 
+        if options.auto_scale:
+            average_bone_length = calculate_average_bone_length(import_bones)
+            auto_scale = options.target_bone_length / average_bone_length
+            options.scale *= auto_scale
+
         for import_bone in import_bones:
-            bone_name = import_bone.psk_bone.name.decode('utf-8')
+            bone_name = import_bone.psk_bone.name.decode('utf-8-sig')
             edit_bone = armature_data.edit_bones.new(bone_name)
 
             if import_bone.parent is not None:
@@ -122,7 +140,7 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
         # MATERIALS
         if options.should_import_materials:
             for material_index, psk_material in enumerate(psk.materials):
-                material_name = psk_material.name.decode('utf-8')
+                material_name = psk_material.name.decode('utf-8-sig')
                 material = None
                 if options.should_reuse_materials and material_name in bpy.data.materials:
                     # Material already exists, just re-use it.
@@ -294,3 +312,27 @@ def import_psk(psk: Psk, context, options: PskImportOptions) -> PskImportResult:
         pass
 
     return result
+
+
+# You may need to add any additional utility functions or classes here, 
+# such as the poly_flags_to_triangle_type_and_bit_flags function, 
+# if they're not defined elsewhere in your codebase.
+
+# Example usage (you would typically call this from your Blender addon's operator):
+#
+# def execute(self, context):
+#     options = PskImportOptions()
+#     options.name = "MyImportedMesh"
+#     options.scale = 1.0
+#     options.auto_scale = True
+#     options.target_bone_length = 0.1
+#     
+#     psk = Psk()  # You would load your PSK data into this object
+#     
+#     result = import_psk(psk, context, options)
+#     
+#     if result.warnings:
+#         for warning in result.warnings:
+#             self.report({'WARNING'}, warning)
+#     
+#     return {'FINISHED'}

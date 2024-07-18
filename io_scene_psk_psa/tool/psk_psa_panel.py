@@ -46,6 +46,11 @@ def register():
 
 def unregister():
     bpy.utils.unregister_class(PSK_PSA_PT_import_export_panel)
-    del bpy.types.Scene.psk_export
-    del bpy.types.Scene.psa_import
-    del bpy.types.Scene.psa_export
+    
+    # Safely remove properties
+    if hasattr(bpy.types.Scene, "psk_export"):
+        del bpy.types.Scene.psk_export
+    if hasattr(bpy.types.Scene, "psa_import"):
+        del bpy.types.Scene.psa_import
+    if hasattr(bpy.types.Scene, "psa_export"):
+        del bpy.types.Scene.psa_export

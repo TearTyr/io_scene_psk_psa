@@ -254,19 +254,6 @@ class PSA_OT_import(Operator, ImportHelper):
             col.prop(pg, 'should_stash')
             col.prop(pg, 'should_use_config_file')
 
-
-class PSA_FH_import(FileHandler):
-    bl_idname = 'PSA_FH_import'
-    bl_label = 'File handler for Unreal PSA import'
-    bl_import_operator = 'psa_import.import'
-    bl_export_operator = 'psa_export.export'
-    bl_file_extensions = '.psa'
-
-    @classmethod
-    def poll_drop(cls, context: Context):
-        return context.area and context.area.type == 'VIEW_3D'
-
-
 classes = (
     PSA_OT_import_sequences_select_all,
     PSA_OT_import_sequences_deselect_all,

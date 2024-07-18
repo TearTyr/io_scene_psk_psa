@@ -111,3 +111,4 @@ data-helpers-types.py
 .vscode/settings.json
 /ignore
 io_scene_psk_psa.zip
+/io_scene_psk_psa/.vscode
